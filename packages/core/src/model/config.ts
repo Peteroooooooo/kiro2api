@@ -58,9 +58,9 @@ export interface Config {
    */
   toolDescriptionMaxLen: number;
   /**
-   * GPT-5.6 系列(sol/terra/luna)的 context window(token)。默认 1000000。
+   * GPT-5.6 系列(sol/terra/luna)的 context window(token)。默认 922000。
    * 网关把上游 contextUsagePercentage 乘以它反推 `usage.input_tokens`,故必须与上游当前
-   * 给该账号的窗口一致;1M 是逐账号渐进放开的,未拿到的账号设回 272000。设错的后果与
+   * 给该账号的窗口一致(`ListAvailableModels` 的 `maxInputTokens`);还停在 272K 的账号设回 272000。设错的后果与
    * 判断口径见踩坑「GPT context window 随上游漂移」。
    * 由 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 配置,启动期经 `initGptContextWindow` 生效一次。
    */

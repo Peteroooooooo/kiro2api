@@ -136,12 +136,12 @@ describe('envSchema - KIRO2CLAUDE_TOOL_DESCRIPTION_MAX_LEN', () => {
 });
 
 describe('envSchema - KIRO2CLAUDE_GPT_CONTEXT_WINDOW', () => {
-  it('defaults to 1000000 (upstream 1M since 2026-09-14) and maps to config.gptContextWindow', () => {
+  it('defaults to 922000 (upstream denominator since 2026-10) and maps to config.gptContextWindow', () => {
     const result = envSchema.safeParse(MINIMAL_ENV);
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.KIRO2CLAUDE_GPT_CONTEXT_WINDOW).toBe(1_000_000);
-      expect(envToConfig(result.data).gptContextWindow).toBe(1_000_000);
+      expect(result.data.KIRO2CLAUDE_GPT_CONTEXT_WINDOW).toBe(922_000);
+      expect(envToConfig(result.data).gptContextWindow).toBe(922_000);
     }
   });
 

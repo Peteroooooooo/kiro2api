@@ -27,13 +27,14 @@ import { z } from 'zod';
 import type { Config } from '../config.js';
 
 /**
- * GPT-5.6 系列 context window 的默认值(上游 2026-09-14 起 1M)。
+ * GPT-5.6 系列 context window 的默认值 = 上游 `contextUsagePercentage` 的分母(2026-09-14 起 1M,
+ * 2026-10 起 922000,与 `ListAvailableModels` 的 `maxInputTokens` 一致)。
  *
  * ★ 单一真相源:`KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 的 schema 默认值、`converter.ts` 的
  * 模块单例初值、`index.ts` 判断「是否被覆盖」的基准,三者必须是同一个数。此前 schema
  * 与 converter 各写一份字面量,只改其一就会让启动告警要么恒响、要么永久静默。
  */
-export const DEFAULT_GPT_CONTEXT_WINDOW = 1_000_000;
+export const DEFAULT_GPT_CONTEXT_WINDOW = 922_000;
 
 // ============================================================================
 // Field-level parsers
@@ -218,7 +219,7 @@ export const envSchema = z.object({
   }),
   // GPT-5.6 系列(sol/terra/luna)的 context window,单位 token。网关用它把上游
   // contextUsagePercentage 反推成 usage.input_tokens,写错了 token 数整体缩放、后果直通
-  // 计费。Kiro 逐账号渐进放开 1M,还停在 272K 的账号设回 272000。
+  // 计费。须与上游给该账号的 GPT `maxInputTokens` 一致,还停在 272K 的账号设回 272000。
   // 详见 Config.gptContextWindow 与踩坑「GPT context window 随上游漂移」。
   KIRO2CLAUDE_GPT_CONTEXT_WINDOW: intField(
     'KIRO2CLAUDE_GPT_CONTEXT_WINDOW',

@@ -84,13 +84,13 @@ Kiro wire 只有消息级 `images[]`——`toolResults[].content` 塞 Bedrock �
 
 ### GPT context window 随上游漂移
 
-`usage.input_tokens` 不是上游直接给的,是网关拿 `contextUsageEvent.contextUsagePercentage` 乘 `getContextWindowSize()` 反推的。**上游改窗口不报错、只缩放**:Kiro 2026-09-14 把 GPT-5.6 升到 1M(`kiro-cli chat --list-models` 写 "1M context window"),网关仍按 272K 算就整体低报 3.68 倍。
+`usage.input_tokens` 不是上游直接给的,是网关拿 `contextUsageEvent.contextUsagePercentage` 乘 `getContextWindowSize()` 反推的。**上游改窗口不报错、只缩放**:Kiro 2026-09-14 把 GPT-5.6 升到 1M(`kiro-cli chat --list-models` 写 "1M context window"),网关仍按 272K 算就整体低报 3.68 倍;2026-10 分母又改成 922000(`ListAvailableModels` 的 `maxInputTokens` 同值),按 1M 算高报 8.46%。
 
 后果直通计费:Kiro 对 >272K 的请求**整条**按双倍档计(sol 4.4x→8.8x)。实测 gpt-5.6-luna 单请求 250,338 token 记 18.25 credit/M、301,919 token 记 36.50,恰好 2.0 倍(测量时每请求随机 conversationId,无缓存折扣干扰,见「会话身份映射到 kiro-cli」)。低报时客户端以为还有余量,真实上下文养到 ~95 万,整段会话每条都落双倍档,单请求可达正常档的数十倍。双倍档本身没有别的缓解。
 
-**为什么 1M 是对的**:Codex 不读网关上报的窗口,只拿 `input_tokens` 比自己内置的常量——Codex 0.154 对 gpt-5.6-sol 内置 272000 再乘 0.95 保留系数 = 258,400(session rollout 的 `model_context_window` 可查)。上报准确时它在真实 258.4K 就压缩,**恰停在双倍线下方,余量 13,600**;低报 3.68 倍时同一个 258.4K 对应真实 950,912,于是整段双倍。★ 这个余量依赖客户端那个常量不变:**客户端若跟进抬到 1M,余量立刻消失**,届时须在客户端侧 pin `model_context_window`。
+**为什么分母必须与上游一致**:Codex 不读网关上报的窗口,只拿 `input_tokens` 比自己内置的常量——Codex 0.154 对 gpt-5.6-sol 内置 272000 再乘 0.95 保留系数 = 258,400(session rollout 的 `model_context_window` 可查)。上报准确时它在真实 258.4K 就压缩,**恰停在双倍线下方,余量 13,600**;低报 3.68 倍时同一个 258.4K 对应真实 950,912,于是整段双倍;高报 8.46% 时则在真实约 238K 就提前压缩。★ 这个余量依赖客户端那个常量不变:**客户端若跟进抬到 1M,余量立刻消失**,届时须在客户端侧 pin `model_context_window`。
 
-Kiro 逐账号灰度,还停在 272K 的账号把 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 设回 272000(反过来高报会让客户端在 7 万就压缩)。判断口径:拿一段已知长度文本发 gpt-5.6-luna(最便宜),`input_tokens` 与 `count_tokens` 差 ~3.7 倍即窗口不匹配。守卫 `test/claude/reasoning-native.test.ts`;`exceeded`(`model_context_window_exceeded`)只看百分比是否到 100,与此常量无关。
+Kiro 逐账号灰度,还停在 272K 的账号把 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 设回 272000(反过来高报会让客户端在 7 万就压缩)。判断口径:同一前缀追加已知个数的单 token 词(o200k 下「空格 + the / of / and 这类常见词」各 1 token),Δ百分比 × 分母 = Δtoken,直接解出分母,不依赖分词器(2026-10-24 luna 两段 10,000 词增量都解出 922000.0,约 0.4 credit);`ListAvailableModels` 的 GPT `maxInputTokens` 也给这个数。守卫 `test/claude/reasoning-native.test.ts`;`exceeded`(`model_context_window_exceeded`)只看百分比是否到 100,与此常量无关。
 
 ### OpenAI prompt_tokens
 

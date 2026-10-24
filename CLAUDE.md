@@ -187,7 +187,7 @@ openai/                 OpenAI 兼容层(import claude/kiro/shared,不被反向�
 ### 多模型 · GPT · OpenAI · Codex
 
 - **GPT 完全相同上游**:唯一差异 `modelId`(外加按模型 schema 的 `additionalModelRequestFields`);`processReasoningContent` 把「见过原生帧」与「有内容可 surface」分开记,合并即错
-- ★ **GPT context window 随上游漂移**:`input_tokens` = 上游百分比 × `getContextWindowSize()`,上游改窗口只缩放不报错;2026-09-14 起 GPT-5.6 为 1M,按 272K 算低报 3.68 倍 → Codex 把上下文养过 Kiro 的 272K 双倍计费线。默认 1M,未拿到 1M 的账号用 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW=272000`;守卫 `test/claude/reasoning-native.test.ts`
+- ★ **GPT context window 随上游漂移**:`input_tokens` = 上游百分比 × `getContextWindowSize()`,上游改窗口只缩放不报错;分母 2026-09-14 起 1M、2026-10 起 922000(= GPT `maxInputTokens`),按 272K 算低报 → Codex 把上下文养过 Kiro 的 272K 双倍计费线,按 1M 算高报 8.46%。默认 922000,未放开的账号用 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW=272000`;守卫 `test/claude/reasoning-native.test.ts`
 - **OpenAI prompt_tokens**:是输入总量,`openai/` usage 直接读 reducer 原始 token、绕过 `buildClaudeUsagePayload`;插件覆写只取 cache_read → `cached_tokens`(总量的子集),别套 `input_tokens` 覆写
 - **Codex 只说 Responses**:编码器红线在 `openai/responses/response-stream.ts` 头注释,改前先跑真实 Codex(`tools/codex/`)
 - ★ **Codex code mode**:工具在 `input[0]` 的 `additional_tools`,判别只看字段在不在;`functions` / `collaboration` namespace 展开与 `namespace` 写回见 `expandNamespaces` 头注释;`agent_message` 三类必转(`convertAgentMessage`);freeform 流式须缓冲到 block 结束。守卫 `test/openai/responses/subagent-wire.test.ts` + `test/static/freeform-tool-contract.test.ts`

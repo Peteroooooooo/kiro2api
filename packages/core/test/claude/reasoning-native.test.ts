@@ -301,22 +301,25 @@ describe('usesNativeReasoning: 模型能力探测', () => {
     );
   });
 
-  it('GPT-5.6 走原生 reasoning + 1M context(上游 2026-09-14 起)', () => {
+  it('GPT-5.6 走原生 reasoning + 922K context(上游 2026-10 起的百分比分母)', () => {
     for (const m of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
       expect(usesNativeReasoning(m)).toBe(true);
-      expect(getContextWindowSize(m)).toBe(1_000_000);
+      expect(getContextWindowSize(m)).toBe(922_000);
     }
   });
 
-  it('GPT-5.6 窗口可运行时覆盖(未拿到 1M 的账号设回 272K),只影响 GPT', () => {
+  it('GPT-5.6 窗口可运行时覆盖(未放开的账号设回 272K),只影响 GPT', () => {
     try {
       initGptContextWindow(272_000);
       expect(getContextWindowSize('gpt-5.6-sol')).toBe(272_000);
       expect(getContextWindowSize('claude-opus-5')).toBe(1_000_000);
-      // 百分比 → token 的乘数必须跟着变:同一个 3.1548% 在 272K 与 1M 下相差 3.68 倍
+      // 百分比 → token 的乘数必须跟着变:同一个 3.1548% 在 272K 与 922K 下相差 3.39 倍
       expect(resolveContextUsage('gpt-5.6-sol', 3.1548).inputTokens).toBe(8581);
       initGptContextWindow(DEFAULT_GPT_CONTEXT_WINDOW);
-      expect(resolveContextUsage('gpt-5.6-sol', 3.1548).inputTokens).toBe(31_548);
+      expect(resolveContextUsage('gpt-5.6-sol', 3.1548).inputTokens).toBe(29_087);
+      // 2026-10-24 luna 实测:前缀 1578 token + 2000 个单 token 词,上游报 0.38806939%(百分比带浮点误差,±1)
+      const measured = resolveContextUsage('gpt-5.6-luna', 0.38806939125061035).inputTokens;
+      expect(Math.abs(measured - 3578)).toBeLessThanOrEqual(1);
     } finally {
       initGptContextWindow(DEFAULT_GPT_CONTEXT_WINDOW);
     }
