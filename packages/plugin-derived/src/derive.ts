@@ -37,6 +37,9 @@
  * this turn's output (true for every model), which is billed at the output
  * rate, so the all-miss baseline is `missPremium · (T − v) + v` with v the
  * visible-output estimate. For missPremium = 1 this is plain T.
+ * A KIRO_BILLING entry may also carry its own measured cache-read ratio
+ * (replacing KIRO_CACHE_READ_RATIO), and LONG_CONTEXT_TIER scales a whole
+ * request once its prompt crosses a length threshold.
  *
  * The Anthropic protocol identity
  *     input_tokens + cache_creation_input_tokens + cache_read_input_tokens
@@ -73,7 +76,7 @@ export const KIRO_OVERAGE_RATE = 0.04;
  * cache discount (symptom: estimatedCacheHitRatio drifts and true
  * full-hit resends stop deriving ~1.0).
  *
- * Known residual: haiku is billed well below the global k_in line (its
+ * Known residual: haiku-4.5 is billed well below the global k_in line (its
  * round6 miss anchors already derive 0.66-0.89 hit ratios), so haiku
  * requests over-attribute cache. The round6 2-point per-model solve was
  * adversarially audited as ill-conditioned (anchors self-contradictory,
@@ -105,6 +108,14 @@ interface ClaudePrice {
   cacheCreation: number;
 }
 
+// Haiku 5.5 是 prompt ≤100K 时的标价;超过 100K 整单 ×5,见 LONG_CONTEXT_TIER
+const HAIKU_5_5_PRICE: ClaudePrice = {
+  in: 0.1e-6,
+  out: 0.5e-6,
+  cacheRead: 0.01e-6,
+  cacheCreation: 0.125e-6,
+};
+
 const CLAUDE_PRICE_USD_PER_TOK: ReadonlyMap<string, ClaudePrice> = new Map([
   [
     'claude-haiku-4-5',
@@ -115,6 +126,7 @@ const CLAUDE_PRICE_USD_PER_TOK: ReadonlyMap<string, ClaudePrice> = new Map([
       cacheCreation: 1.25e-6,
     },
   ],
+  ['claude-haiku-5-5', HAIKU_5_5_PRICE],
   [
     'claude-sonnet-4-5',
     {
@@ -217,8 +229,10 @@ interface KiroBilling {
   /** Kiro 基价(USD/token,与价格表同口径代入 k_in / k_out) */
   in: number;
   out: number;
-  /** 未命中输入 = missPremium × 基价;命中仍是 `_cacheReadRatio` × 基价 */
+  /** 未命中输入 = missPremium × 基价;命中 = 命中比例 × 基价 */
   missPremium: number;
+  /** 逐模型实测的命中比例;缺省用全局 `_cacheReadRatio`(该旋钮不作用于填了这一项的模型) */
+  cacheReadRatio?: number;
 }
 
 /**
@@ -230,6 +244,19 @@ function kiroBilling(rateMultiplier: number, missPremium = 1): KiroBilling {
 }
 
 /**
+ * Kiro 计价与 Anthropic 标价同构(命中、输出相对未命中输入的比例都同标价),整体 × `usdPerListUsd`。反演把
+ * T 里的本轮输出按基价计入(见 `allMiss`),所以 `out` 只留输出比输入贵出的那部分。
+ */
+function kiroBillingFromList(price: ClaudePrice, usdPerListUsd: number): KiroBilling {
+  return {
+    in: (usdPerListUsd * price.in) / KIRO_K_IN,
+    out: (usdPerListUsd * (price.out - price.in)) / KIRO_K_OUT,
+    missPremium: 1,
+    cacheReadRatio: price.cacheRead / price.in,
+  };
+}
+
+/**
  * Anthropic 标价明显偏离 Kiro 倍率线的模型,反演改用这里的 Kiro 计价;价格表只管
  * `claudeEquivalentCostUsd`。没列的模型直接用价格表单价反演:opus 系正在线上,sonnet-4.x 高 1.5%;haiku
  * 按倍率线算高 10%,与 KIRO_CACHE_READ_RATIO 记录的 haiku 残差同向。实测证据与标定入口见 PITFALLS
@@ -238,16 +265,29 @@ function kiroBilling(rateMultiplier: number, missPremium = 1): KiroBilling {
  * - sonnet-5:1.3x,Kiro 计价与 sonnet-4.6 逐项相同;标价降到 $2/$10 后离开倍率线。
  * - opus-5.5:2.0x,命中与输出按倍率缩放,未命中输入另加 1.942 倍基价。
  * - sonnet-5.5:1.3x,命中与输出同 sonnet-5,未命中输入另加 1.942 倍基价。
+ * - haiku-5.5:标 0.06x 但不在倍率线上,而是 Anthropic 标价 × 0.4617(11.54 credit/$):未命中、命中
+ *   (0.1×)、输出三项都同比;prompt 超过 100K 另见 LONG_CONTEXT_TIER。
  */
 const KIRO_BILLING: ReadonlyMap<string, KiroBilling> = new Map([
   ['claude-sonnet-5', kiroBilling(1.3)],
   ['claude-sonnet-5-5', kiroBilling(1.3, 1.9423)],
   ['claude-opus-5-5', kiroBilling(2.0, 1.9423)],
+  ['claude-haiku-5-5', kiroBillingFromList(HAIKU_5_5_PRICE, 0.4617)],
 ]);
+
+/**
+ * 按 prompt 长度分档计价的模型:prompt(含命中,不含本轮输出)超过 `thresholdTokens` 时整单 × `factor`,
+ * Anthropic 标价与 Kiro 计价同一分界、同一倍数。haiku-5.5(2026-10-24 直打):95K 冷请求仍在低档线上,
+ * 105K / 120K 冷请求与 120K 命中都恰为低档 × 5.000,是整单加价、不是只有超出部分加价。
+ */
+const LONG_CONTEXT_TIER: ReadonlyMap<string, { thresholdTokens: number; factor: number }> = new Map(
+  [['claude-haiku-5-5', { thresholdTokens: 100_000, factor: 5 }]],
+);
 
 /** Anthropic 最小可缓存前缀(prompt-caching 文档,各平台一致);随代际不单调。 */
 const MODEL_CACHE_THRESHOLD: ReadonlyMap<string, number> = new Map([
   ['claude-haiku-4-5', 4096],
+  ['claude-haiku-5-5', 512],
   ['claude-sonnet-4-5', 1024],
   ['claude-sonnet-4-6', 1024],
   ['claude-sonnet-5', 1024],
@@ -410,6 +450,12 @@ function gptVariant(model: string): keyof typeof GPT_RATE_MULTIPLIER | undefined
   if (lower.includes('luna')) return 'luna';
   if (lower.includes('codex')) return 'sol';
   return undefined;
+}
+
+/** 本单的分档倍数:prompt 超过该模型 `LONG_CONTEXT_TIER` 的分界时取其 `factor`,否则 1。 */
+function longContextFactor(model: string, promptTokens: number): number {
+  const tier = LONG_CONTEXT_TIER.get(model);
+  return tier !== undefined && promptTokens > tier.thresholdTokens ? tier.factor : 1;
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -589,23 +635,25 @@ export function deriveKiroUsage(
   }
 
   // Step 2: invert credits → effective uncached input (in base-price tokens)
+  const visibleOut = clamp(outputTokens, 0, inputTokensTotal);
+  const tier = longContextFactor(normalizedModel, inputTokensTotal - visibleOut);
   const kiro = KIRO_BILLING.get(normalizedModel) ?? { in: cp.in, out: cp.out, missPremium: 1 };
   const kiroUsd = credits * KIRO_OVERAGE_RATE;
-  const kiroInputUsd = Math.max(0, kiroUsd - KIRO_K_OUT * kiro.out * outputTokens);
-  const tEffIn = kiroInputUsd / (KIRO_K_IN * kiro.in);
+  const kiroInputUsd = Math.max(0, kiroUsd - KIRO_K_OUT * kiro.out * tier * outputTokens);
+  const tEffIn = kiroInputUsd / (KIRO_K_IN * kiro.in * tier);
   // 未命中溢价只作用于 prompt:T 含本轮输出,输出按输出价计、不带溢价(opus-5.5 与 opus-5 的
   // 输出单价比正好是倍率 2.0/2.2)。把溢价乘到整个 T 上,冷请求会凭空多出约 0.67 × 输出的命中。
-  const visibleOut = clamp(outputTokens, 0, inputTokensTotal);
   const allMiss = kiro.missPremium * (inputTokensTotal - visibleOut) + visibleOut;
 
   let cacheRead: number;
   if (tEffIn >= allMiss) {
     cacheRead = 0;
   } else {
-    // Divisor uses the runtime-effective ratio (measured default unless the
-    // KIRO2CLAUDE_CACHE_READ_RATIO knob overrides it). _cacheReadRatio is
-    // constrained to [0, 1) and missPremium ≥ 1, so the divisor is always > 0.
-    const raw = (allMiss - tEffIn) / (kiro.missPremium - _cacheReadRatio);
+    // Divisor uses the model's measured ratio, else the runtime-effective global
+    // one (measured default unless the KIRO2CLAUDE_CACHE_READ_RATIO knob overrides
+    // it). Both are < 1 and missPremium ≥ 1, so the divisor is always > 0.
+    const readRatio = kiro.cacheReadRatio ?? _cacheReadRatio;
+    const raw = (allMiss - tEffIn) / (kiro.missPremium - readRatio);
     // Round first, then clamp: clamping before rounding could let a fractional
     // cap round up past inputTokensTotal (harmless today — token counts are
     // integers — but this keeps cacheRead ≤ total unconditionally).
@@ -626,10 +674,11 @@ export function deriveKiroUsage(
   // Step 4: cost — using Anthropic public price table, then floor against
   // upstream cost so finalCostUsd never falls below `credits × KIRO_OVERAGE_RATE`.
   const claudeUsd =
-    uncached * cp.in +
-    cacheCreation * cp.cacheCreation +
-    cacheRead * cp.cacheRead +
-    outputTokens * cp.out;
+    tier *
+    (uncached * cp.in +
+      cacheCreation * cp.cacheCreation +
+      cacheRead * cp.cacheRead +
+      outputTokens * cp.out);
   const { finalUsd, floorApplied } = applyFloor(claudeUsd, credits);
 
   return {

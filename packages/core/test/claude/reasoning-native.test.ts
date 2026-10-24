@@ -268,7 +268,7 @@ describe('usesNativeReasoning: 模型能力探测', () => {
     expect(usesNativeReasoning('claude-sonnet-4.6')).toBe(true);
   });
 
-  it('opus-4.6 / 4.5 / sonnet-4.5 / haiku 非原生:不做 thinking 控制', () => {
+  it('opus-4.6 / 4.5 / sonnet-4.5 / haiku-4.5 非原生:不做 thinking 控制', () => {
     // opus-4.6:上游 schema 有 thinking,但发了字段既无 reasoning 帧也无 signature,没有可回传的
     // 东西,不入集合。其余无 schema。
     expect(usesNativeReasoning('claude-opus-4.6')).toBe(false);
@@ -291,6 +291,8 @@ describe('usesNativeReasoning: 模型能力探测', () => {
         'claude-opus-5.5',
         // 2026-10-07 ListAvailableModels:thinking adaptive / between_tools、effort 五档默认 high
         'claude-sonnet-5.5',
+        // 2026-10-24 ListAvailableModels:thinking adaptive / disabled、effort 五档默认 medium
+        'claude-haiku-5.5',
         // GPT-5.6 系列走 additionalModelRequestFields.reasoning（内容加密不可 surface）
         'gpt-5.6-sol',
         'gpt-5.6-terra',
@@ -455,6 +457,10 @@ describe('convertRequest: 顶层 additionalModelRequestFields(effort 唯一生�
       convertRequest(baseMessagesRequest({ model: 'claude-sonnet-5-5' }))
         .additionalModelRequestFields,
     ).toEqual({ thinking: { type: 'adaptive' }, output_config: { effort: 'high' } });
+    expect(
+      convertRequest(baseMessagesRequest({ model: 'claude-haiku-5-5' }))
+        .additionalModelRequestFields,
+    ).toEqual({ thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } });
   });
 
   it('4.7 + thinking.type=disabled → {thinking:{type:disabled}}(真关,不是不发)', () => {
@@ -494,11 +500,13 @@ describe('convertRequest: 顶层 additionalModelRequestFields(effort 唯一生�
         output_config: { effort: 'high' },
       });
     }
-    // 常开豁免只针对常开模型:其它 Claude 原生模型 disabled 仍真关
-    const opusOff = baseMessagesRequest({ model: 'claude-opus-5', thinking: { type: 'disabled' } });
-    expect(convertRequest(opusOff).additionalModelRequestFields).toEqual({
-      thinking: { type: 'disabled' },
-    });
+    // 常开豁免只针对常开模型:其它 Claude 原生模型 disabled 仍真关(haiku-5.5 的 schema 有 disabled)
+    for (const model of ['claude-opus-5', 'claude-haiku-5-5']) {
+      const off = baseMessagesRequest({ model, thinking: { type: 'disabled' } });
+      expect(convertRequest(off).additionalModelRequestFields).toEqual({
+        thinking: { type: 'disabled' },
+      });
+    }
   });
 
   it('toKiroRequest + serializeKiroRequest:字段落在 wire 顶层,与 conversationState 平级', () => {

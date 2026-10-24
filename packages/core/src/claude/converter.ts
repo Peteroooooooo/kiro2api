@@ -180,7 +180,7 @@ const CLAUDE_FAMILIES: readonly ClaudeFamily[] = [
     ],
     'claude-opus-4.6',
   ),
-  claudeFamily('haiku', ['claude-haiku-4.5'], 'claude-haiku-4.5'),
+  claudeFamily('haiku', ['claude-haiku-4.5', 'claude-haiku-5.5'], 'claude-haiku-4.5'),
 ];
 
 /**
@@ -241,8 +241,9 @@ export function mapModel(model: string): string | undefined {
  *     reasoning 帧同 opus-5;
  *   - sonnet-5.5:schema 的 thinking 是 adaptive / between_tools,同样关不掉(见 `MODELS_THINKING_ALWAYS_ON`),
  *     effort 五档、默认 high;
+ *   - haiku-5.5:schema 的 thinking 是 adaptive / disabled,effort 五档、默认 medium,reasoning 帧与签名同 opus-5;
  *   - opus-4.6:发字段只涨计费、既无 reasoning 帧也无 signature,没有可回传的东西,不入集合;
- *   - 4.5 及以下 / haiku:无 schema。
+ *   - 4.5 及以下(含 haiku-4.5):无 schema。
  *
  * GPT-5.6 走 `additionalModelRequestFields.reasoning.effort`;其 reasoning 不透明(V3 回
  * `{text:"...", signature}`,文本只是占位),不作为 thinking 展示、只经信封回传——见 stream.ts
@@ -256,6 +257,7 @@ export const MODELS_WITH_NATIVE_REASONING: ReadonlySet<string> = new Set([
   'claude-sonnet-4.6',
   'claude-opus-5.5',
   'claude-sonnet-5.5',
+  'claude-haiku-5.5',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',
@@ -288,6 +290,7 @@ export function isGptModelId(mappedModelId: string): boolean {
 const DEFAULT_EFFORT_BY_MODEL: ReadonlyMap<string, EffortLevel> = new Map([
   ['claude-opus-4.7', 'xhigh'],
   ['claude-opus-5.5', 'medium'],
+  ['claude-haiku-5.5', 'medium'],
 ]);
 
 export function defaultEffort(mappedModelId: string | undefined): EffortLevel {
@@ -410,6 +413,7 @@ const CLAUDE_MODELS_WITH_1M_CONTEXT: ReadonlySet<string> = new Set([
   'claude-opus-4.8',
   'claude-opus-5',
   'claude-opus-5.5',
+  'claude-haiku-5.5',
 ]);
 
 /**
@@ -419,7 +423,7 @@ const CLAUDE_MODELS_WITH_1M_CONTEXT: ReadonlySet<string> = new Set([
  * Opus 4.7 and 4.8 also ship with the 1M window (上游 list-models 实测确认).
  * Opus 5 同为 1M context (上游 `--list-models` 实测: context_window_tokens 1000000).
  * Sonnet 5 同为 1M context (Anthropic 官方规格,与前代 Sonnet 4.6 一致).
- * Opus 5.5 / Sonnet 5.5 同为 1M context (上游 `ListAvailableModels` tokenLimits.maxInputTokens 1000000).
+ * Opus 5.5 / Sonnet 5.5 / Haiku 5.5 同为 1M context (上游 `ListAvailableModels` tokenLimits.maxInputTokens 1000000).
  * GPT-5.6 系列 2026-09-14 起为 1M context(上游 `--list-models` 实测: "1M context
  * window";此前为 272K),逐账号灰度,故可由 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 覆盖。
  *

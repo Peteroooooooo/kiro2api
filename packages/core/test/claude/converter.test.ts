@@ -108,6 +108,7 @@ describe('mapModel', () => {
     expect(mapModel('claude-sonnet-5-6')).toBeUndefined();
     expect(mapModel('claude-sonnet-6')).toBeUndefined();
     expect(mapModel('claude-haiku-5')).toBeUndefined();
+    expect(mapModel('claude-haiku-5-6')).toBeUndefined();
   });
 
   it('test_map_model_between_known_versions_undefined', () => {
@@ -185,6 +186,16 @@ describe('mapModel', () => {
     expect(mapModel('claude-sonnet-5-1m')).toBe('claude-sonnet-5');
   });
 
+  it('test_map_model_haiku_5_5', () => {
+    expect(mapModel('claude-haiku-5-5')).toBe('claude-haiku-5.5');
+    expect(mapModel('claude-haiku-5.5')).toBe('claude-haiku-5.5');
+    expect(mapModel('claude-haiku-5-5-thinking')).toBe('claude-haiku-5.5');
+    expect(mapModel('anthropic.claude-haiku-5-5')).toBe('claude-haiku-5.5');
+    // 不与 haiku-4.5 串,老写法照旧兜底到 4.5
+    expect(mapModel('claude-haiku-4-5-20251001')).toBe('claude-haiku-4.5');
+    expect(mapModel('claude-3-5-haiku-20241022')).toBe('claude-haiku-4.5');
+  });
+
   it('test_map_model_fable_unsupported', () => {
     // Fable 系列不支持(上游尚不成熟):不落进任何家族,400 UnsupportedModel
     expect(mapModel('claude-fable-5-1')).toBeUndefined();
@@ -248,13 +259,17 @@ describe('getContextWindowSize / usesNativeReasoning — opus-5', () => {
   });
 });
 
-describe('getContextWindowSize — opus-5.5 / sonnet-5.5', () => {
+describe('getContextWindowSize — opus-5.5 / sonnet-5.5 / haiku-5.5', () => {
   // usesNativeReasoning 由 reasoning-native.test.ts 的全量模型表覆盖
-  it('opus-5.5 / sonnet-5.5 context window 为 1M', () => {
+  it('opus-5.5 / sonnet-5.5 / haiku-5.5 context window 为 1M', () => {
     expect(getContextWindowSize('claude-opus-5-5')).toBe(1_000_000);
     expect(getContextWindowSize('claude-opus-5-5-thinking')).toBe(1_000_000);
     expect(getContextWindowSize('claude-sonnet-5-5')).toBe(1_000_000);
     expect(getContextWindowSize('claude-sonnet-5-5-thinking')).toBe(1_000_000);
+    expect(getContextWindowSize('claude-haiku-5-5')).toBe(1_000_000);
+    expect(getContextWindowSize('claude-haiku-5-5-thinking')).toBe(1_000_000);
+    // haiku-4.5 仍是 200K
+    expect(getContextWindowSize('claude-haiku-4-5-20251001')).toBe(200_000);
   });
 });
 

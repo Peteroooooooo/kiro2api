@@ -191,6 +191,25 @@ export const MODELS: Model[] = [
     type: 'chat',
     max_tokens: 64000,
   },
+  // created = 2026-10-07 发布日
+  {
+    id: 'claude-haiku-5-5',
+    object: 'model',
+    created: 1791331200,
+    owned_by: 'anthropic',
+    display_name: 'Claude Haiku 5.5',
+    type: 'chat',
+    max_tokens: 64000,
+  },
+  {
+    id: 'claude-haiku-5-5-thinking',
+    object: 'model',
+    created: 1791331200,
+    owned_by: 'anthropic',
+    display_name: 'Claude Haiku 5.5 (Thinking)',
+    type: 'chat',
+    max_tokens: 64000,
+  },
   {
     id: 'claude-haiku-4-5-20251001',
     object: 'model',

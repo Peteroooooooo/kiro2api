@@ -261,6 +261,7 @@ describe('deriveKiroUsage — cache threshold gating', () => {
     ['claude-sonnet-4-6', 1024, 0.005],
     ['claude-sonnet-5', 1024, 0.001],
     ['claude-sonnet-5-5', 512, 0.001],
+    ['claude-haiku-5-5', 512, 0.0001],
     ['claude-opus-4-7', 2048, 0.001],
     ['claude-opus-4-8', 1024, 0.001],
     ['claude-opus-5', 512, 0.001],
@@ -469,6 +470,86 @@ describe('deriveKiroUsage — sonnet-5.5 专属', () => {
     expect(
       Math.abs(s55.derived.estimatedCacheHitRatio - s5.derived.estimatedCacheHitRatio),
     ).toBeLessThan(0.01);
+  });
+});
+
+// ============================================================================
+// haiku-5.5:Kiro 计价 = Anthropic 标价 × 0.4617,命中 0.1×,prompt 超过 100K 整单 ×5
+// ============================================================================
+// 2026-10-24 直打标定(thinking disabled / adaptive low,输出 "OK" / "OK AGAIN" 按 1 / 3 个 token 计)。
+// 上游自带约 6442 token 的前缀,同账号连发时恒命中,所以冷请求应反演出约这么多命中而不是 0。
+// 行 = [label, total tokens (contextUsage), 可见输出, credits]。
+
+describe('deriveKiroUsage — haiku-5.5 (标价同构 + 100K 分档)', () => {
+  const UPSTREAM_PREFIX = 6442;
+  const COLD: Array<[string, number, number, number]> = [
+    ['cold 10K', 10530, 1, 0.005462388059701492],
+    ['cold 71K', 71115, 1, 0.07538903482587064],
+    ['cold 95K(低档)', 94949, 1, 0.10289765572139303],
+    ['cold 105K(高档)', 105045, 1, 0.572753751243781],
+    ['cold 120K(高档)', 120005, 1, 0.6590900696517412],
+  ];
+  const WARM: Array<[string, number, number, number]> = [
+    ['warm 10K', 10560, 3, 0.001295852736318406],
+    ['warm 71K', 71140, 3, 0.008288517412935327],
+    ['warm 120K(高档,命中同样 ×5)', 120033, 3, 0.06966809950248759],
+  ];
+
+  for (const [label, total, out, credits] of COLD) {
+    it(`${label}:只反演出上游前缀那段命中`, () => {
+      const r = deriveKiroUsage('claude-haiku-5-5', total, out, credits);
+      expect(r.derived.derivedStatus).toBe('ok_derived');
+      expect(Math.abs(r.cacheReadInputTokens - UPSTREAM_PREFIX)).toBeLessThan(50);
+      expect(r.inputTokens + r.cacheCreationInputTokens + r.cacheReadInputTokens).toBe(total);
+    });
+  }
+
+  for (const [label, total, out, credits] of WARM) {
+    it(`${label}:同前缀第二轮几乎全命中`, () => {
+      expect(
+        deriveKiroUsage('claude-haiku-5-5', total, out, credits).derived.estimatedCacheHitRatio,
+      ).toBeGreaterThan(0.99);
+    });
+  }
+
+  it('分界按 prompt(不含本轮输出)算:100K prompt + 输出不进高档', () => {
+    const low = deriveKiroUsage('claude-haiku-5-5', 100_000, 0, 0.01);
+    const lowWithOutput = deriveKiroUsage('claude-haiku-5-5', 100_500, 500, 0.01);
+    const high = deriveKiroUsage('claude-haiku-5-5', 100_001, 0, 0.01);
+    expect(lowWithOutput.derived.claudeEquivalentCostUsd).toBeLessThan(
+      high.derived.claudeEquivalentCostUsd,
+    );
+    // 同样的 credits 落在高档时折成的基价 token 只有 1/5,反演出的命中更多
+    expect(high.cacheReadInputTokens).toBeGreaterThan(low.cacheReadInputTokens);
+  });
+
+  it('成本按 Anthropic 标价,高档整单 ×5(写入 / 命中 / 输出一起)', () => {
+    const price = { in: 0.1e-6, write: 0.125e-6, read: 0.01e-6, out: 0.5e-6 };
+    for (const [, total, out, credits] of [...COLD, ...WARM]) {
+      const r = deriveKiroUsage('claude-haiku-5-5', total, out, credits);
+      const factor = total - out > 100_000 ? 5 : 1;
+      const expected =
+        factor *
+        (r.inputTokens * price.in +
+          r.cacheCreationInputTokens * price.write +
+          r.cacheReadInputTokens * price.read +
+          out * price.out);
+      expect(r.derived.claudeEquivalentCostUsd).toBeCloseTo(expected, 14);
+    }
+  });
+
+  it('命中比例是逐模型实测值,不受 KIRO2CLAUDE_CACHE_READ_RATIO 旋钮影响', () => {
+    const args = ['claude-haiku-5-5', 71115, 1, 0.07538903482587064] as const;
+    const base = deriveKiroUsage(...args);
+    initCacheReadRatio(0.9);
+    expect(deriveKiroUsage(...args)).toEqual(base);
+  });
+
+  it('dot-form / -thinking 归一到同一 key', () => {
+    const args = [120033, 3, 0.06966809950248759] as const;
+    const base = deriveKiroUsage('claude-haiku-5-5', ...args);
+    expect(deriveKiroUsage('claude-haiku-5.5', ...args)).toEqual(base);
+    expect(deriveKiroUsage('claude-haiku-5-5-thinking', ...args)).toEqual(base);
   });
 });
 
