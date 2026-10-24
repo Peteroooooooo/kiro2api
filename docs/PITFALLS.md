@@ -86,7 +86,7 @@ Kiro wire 只有消息级 `images[]`——`toolResults[].content` 塞 Bedrock �
 
 `usage.input_tokens` 不是上游直接给的,是网关拿 `contextUsageEvent.contextUsagePercentage` 乘 `getContextWindowSize()` 反推的。**上游改窗口不报错、只缩放**:Kiro 2026-09-14 把 GPT-5.6 升到 1M(`kiro-cli chat --list-models` 写 "1M context window"),网关仍按 272K 算就整体低报 3.68 倍;2026-10 分母又改成 922000(`ListAvailableModels` 的 `maxInputTokens` 同值),按 1M 算高报 8.46%。
 
-后果直通计费:Kiro 对 >272K 的请求**整条**按双倍档计(sol 4.4x→8.8x)。实测 gpt-5.6-luna 单请求 250,338 token 记 18.25 credit/M、301,919 token 记 36.50,恰好 2.0 倍(测量时每请求随机 conversationId,无缓存折扣干扰,见「会话身份映射到 kiro-cli」)。低报时客户端以为还有余量,真实上下文养到 ~95 万,整段会话每条都落双倍档,单请求可达正常档的数十倍。双倍档本身没有别的缓解。
+后果直通计费:Kiro 对 >272K 的请求**整条**按双倍档计(sol 4.4x→8.8x),命中部分也翻倍(见「GPT credit 锚定与缓存反演」)。实测 gpt-5.6-luna 单请求 250,338 token 记 18.25 credit/M、301,919 token 记 36.50,恰好 2.0 倍(测量时每请求随机 conversationId,无缓存折扣干扰,见「会话身份映射到 kiro-cli」)。低报时客户端以为还有余量,真实上下文养到 ~95 万,整段会话每条都落双倍档,单请求可达正常档的数十倍。双倍档本身没有别的缓解。
 
 **为什么分母必须与上游一致**:Codex 不读网关上报的窗口,只拿 `input_tokens` 比自己内置的常量——Codex 0.154 对 gpt-5.6-sol 内置 272000 再乘 0.95 保留系数 = 258,400(session rollout 的 `model_context_window` 可查)。上报准确时它在真实 258.4K 就压缩,**恰停在双倍线下方,余量 13,600**;低报 3.68 倍时同一个 258.4K 对应真实 950,912,于是整段双倍;高报 8.46% 时则在真实约 238K 就提前压缩。★ 这个余量依赖客户端那个常量不变:**客户端若跟进抬到 1M,余量立刻消失**,届时须在客户端侧 pin `model_context_window`。
 
@@ -160,6 +160,7 @@ plugin-derived 据此反演(`gptCacheDerivedBreakdown`):按隐藏推理 = 0 解�
 
 - **`kiro.inputTokens` 含本次输出**:contextUsage 百分比是生成之后的上下文占用,数到 100 / 1600 的对照里「输入」随输出长度增长,Claude 与 GPT 相同。GPT 反演已按此处理(先减可见输出);网关对所有模型上报的 `input_tokens` 目前都包含输出。
 - **端到端验收**(2026-09-24,`test/manual/gpt-cache-derive-live.mjs` 走本地网关,命中真值由构造给出):把 o200k 数出的真实输出代入公式,7.6K–62K 前缀、部分命中、3.8K 输出、luna / sol、Chat / Responses 的误差恒为约 −24 token(续写边界的固定尾巴,与规模无关),credits 预测残差 < 1%——公式与常数成立,o200k 与上游计数一致。网关的误差全在可见输出 v:`estimateOutputTokens` 是字符启发式,对 GPT 偏差大(数字串估 1723、实为 3800;150 词短文估 287、实为 181),经 `(k_out/k_in − 1)/0.9 ≈ 6.3` 倍放大——估少则少报(续写 + 长输出少报 13K),**估多则虚报**(冷请求报出 642 命中,真值 0)。隐藏推理同理低估约 6.3×推理 token(实测约 32 个推理 token → −225)。
+- **超过 272K 整单 ×2,命中部分也翻倍**(2026-10-24,luna 同一 conversationId 三轮):264,584 冷请求仍在低档线上(单价 = k_in × 0.6 × 1.0001);加 518 仍低于 272K 的一单按 0.1× 命中正常;再加 15K 越线的一单按「整单 ×2」预测 0.8264、实测 0.8271,只对新增加价 / 不加价分别是 0.563 / 0.413——分界按含命中的总量算。反演把倍率乘上分档(`GPT_LONG_CONTEXT`),否则越线的一单命中会被截成 0。
 - **同会话切换 effort 让 GPT 缓存失效**:none → medium 的续写 credits 与冷请求逐位相同,两轮都 medium 则正常命中。反演据 credits 报 0 是对的;Codex 同一线程 effort 不变,不受影响。
 
 ## 错误流转 · 容量事件诊断

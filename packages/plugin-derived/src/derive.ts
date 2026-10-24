@@ -280,9 +280,14 @@ const KIRO_BILLING: ReadonlyMap<string, KiroBilling> = new Map([
  * Anthropic 标价与 Kiro 计价同一分界、同一倍数。haiku-5.5(2026-10-24 直打):95K 冷请求仍在低档线上,
  * 105K / 120K 冷请求与 120K 命中都恰为低档 × 5.000,是整单加价、不是只有超出部分加价。
  */
-const LONG_CONTEXT_TIER: ReadonlyMap<string, { thresholdTokens: number; factor: number }> = new Map(
-  [['claude-haiku-5-5', { thresholdTokens: 100_000, factor: 5 }]],
-);
+interface LongContextTier {
+  thresholdTokens: number;
+  factor: number;
+}
+
+const LONG_CONTEXT_TIER: ReadonlyMap<string, LongContextTier> = new Map([
+  ['claude-haiku-5-5', { thresholdTokens: 100_000, factor: 5 }],
+]);
 
 /** Anthropic 最小可缓存前缀(prompt-caching 文档,各平台一致);随代际不单调。 */
 const MODEL_CACHE_THRESHOLD: ReadonlyMap<string, number> = new Map([
@@ -452,9 +457,8 @@ function gptVariant(model: string): keyof typeof GPT_RATE_MULTIPLIER | undefined
   return undefined;
 }
 
-/** 本单的分档倍数:prompt 超过该模型 `LONG_CONTEXT_TIER` 的分界时取其 `factor`,否则 1。 */
-function longContextFactor(model: string, promptTokens: number): number {
-  const tier = LONG_CONTEXT_TIER.get(model);
+/** 本单的分档倍数:prompt 超过分界时取 `factor`,没有分档或没超过时为 1。 */
+function tierFactor(tier: LongContextTier | undefined, promptTokens: number): number {
   return tier !== undefined && promptTokens > tier.thresholdTokens ? tier.factor : 1;
 }
 
@@ -535,6 +539,11 @@ const GPT_K_OUT = 1.1048e-4;
 const GPT_CACHE_READ_RATIO = 0.1;
 /** 上游 `ListAvailableModels` 的 rateMultiplier;新增 GPT 变体时与 core `mapModel` 同改。 */
 const GPT_RATE_MULTIPLIER = { sol: 4.4, terra: 2.2, luna: 0.6 } as const;
+/**
+ * prompt(含命中)超过 272K 时整单 ×2,命中部分同样翻倍(2026-10-24 luna 同会话:265K 命中 + 15K
+ * 新内容的一单,按整单 ×2 预测与实测差 0.08%;只对新增加价、不加价分别差 32% / 50%)。
+ */
+const GPT_LONG_CONTEXT: LongContextTier = { thresholdTokens: 272_000, factor: 2 };
 
 /**
  * GPT-5.6 系列:由 credits 反演缓存命中,成本仍锚定 credits×0.04。
@@ -544,7 +553,7 @@ const GPT_RATE_MULTIPLIER = { sol: 4.4, terra: 2.2, luna: 0.6 } as const;
  *
  *     C = (GPT_K_IN · (T − v) + GPT_K_OUT · v − credits / 倍率) / ((1 − 0.1) · GPT_K_IN)
  *
- * 截到 `[0, T − v]`。推理把真实 credits 抬高 → 这里把它当成未命中输入 → C 只会**低估**。
+ * 倍率含 272K 分档(`GPT_LONG_CONTEXT`)。截到 `[0, T − v]`。推理把真实 credits 抬高 → 这里把它当成未命中输入 → C 只会**低估**。
  * v 的误差放大 `(GPT_K_OUT / GPT_K_IN − 1) / 0.9 ≈ 6.3` 倍:v 估多 Δ 就虚报约 6.3Δ 的命中
  * (v 来自 core 的 `kiro.outputTokens`,端到端验收见 PITFALLS「GPT credit 锚定与缓存反演」)。
  * Codex 长会话回放:effort=low 命中 95.9–99.6%、high 85.5–97.8%(同会话上一请求总量为近似
@@ -565,8 +574,8 @@ function gptCacheDerivedBreakdown(
 ): DerivedUsageBreakdown {
   const total = Math.max(0, inputTokensTotal);
   const visibleOut = clamp(outputTokens, 0, total);
-  const mult = GPT_RATE_MULTIPLIER[variant];
   const promptTokens = total - visibleOut;
+  const mult = GPT_RATE_MULTIPLIER[variant] * tierFactor(GPT_LONG_CONTEXT, promptTokens);
   const raw =
     (GPT_K_IN * promptTokens + GPT_K_OUT * visibleOut - credits / mult) /
     ((1 - GPT_CACHE_READ_RATIO) * GPT_K_IN);
@@ -636,7 +645,7 @@ export function deriveKiroUsage(
 
   // Step 2: invert credits → effective uncached input (in base-price tokens)
   const visibleOut = clamp(outputTokens, 0, inputTokensTotal);
-  const tier = longContextFactor(normalizedModel, inputTokensTotal - visibleOut);
+  const tier = tierFactor(LONG_CONTEXT_TIER.get(normalizedModel), inputTokensTotal - visibleOut);
   const kiro = KIRO_BILLING.get(normalizedModel) ?? { in: cp.in, out: cp.out, missPremium: 1 };
   const kiroUsd = credits * KIRO_OVERAGE_RATE;
   const kiroInputUsd = Math.max(0, kiroUsd - KIRO_K_OUT * kiro.out * tier * outputTokens);

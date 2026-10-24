@@ -628,6 +628,27 @@ describe('deriveKiroUsage — GPT branch (cache inverted, cost anchored)', () =>
     expect(luna.cacheReadInputTokens).toBe(terra.cacheReadInputTokens);
   });
 
+  it('prompt 超过 272K 整单 ×2(命中也翻倍):同会话越线的一单仍拆出上一请求全量命中', () => {
+    // 2026-10-24 luna 同一 conversationId 三轮:A 冷 264,584;C 加 518 仍低于 272K;B 再加 15K 越线
+    const cold = deriveKiroUsage('gpt-5.6-luna', 264_584, 1, 2.6329583069651736);
+    expect(cold.cacheReadInputTokens).toBe(0);
+    const below = deriveKiroUsage('gpt-5.6-luna', 265_102, 1, 0.2688226051741293);
+    expect(Math.abs(below.cacheReadInputTokens - 264_584)).toBeLessThan(100);
+    const above = deriveKiroUsage('gpt-5.6-luna', 280_118, 1, 0.8270987034825867);
+    expect(Math.abs(above.cacheReadInputTokens - 265_102)).toBeLessThan(100);
+  });
+
+  it('272K 分界按 prompt(不含本轮输出)算', () => {
+    const credits = 0.5;
+    // 同样的 credits,越线时折成一半的基价消耗 → 反演出更多命中
+    const at = deriveKiroUsage('gpt-5.6-luna', 272_000, 0, credits);
+    const over = deriveKiroUsage('gpt-5.6-luna', 272_001, 0, credits);
+    expect(over.cacheReadInputTokens).toBeGreaterThan(at.cacheReadInputTokens);
+    // 272,000 prompt + 500 输出:prompt 未越线,与 272,000 同档
+    const withOutput = deriveKiroUsage('gpt-5.6-luna', 272_500, 500, credits);
+    expect(withOutput.cacheReadInputTokens).toBeLessThan(over.cacheReadInputTokens);
+  });
+
   it('Codex alias (gpt-5-codex) is priced as sol', () => {
     const alias = deriveKiroUsage('gpt-5-codex', 13626, 1, 0.10195229419568819);
     const sol = deriveKiroUsage('gpt-5.6-sol', 13626, 1, 0.10195229419568819);
