@@ -2079,7 +2079,7 @@ function stripLeakedToolCallsFromAssistantHistory(
 /**
  * 把 Claude Messages 请求转换为 Kiro `ConversationState`。
  *
- * body 形态对齐 kiro-cli `chat --v3`(KAS)抓包:`origin=AI_EDITOR`、`agentTaskType=vibe`、
+ * body 形态对齐 kiro-cli 交互式 `chat --v3`(KAS)抓包:`origin=KIRO_CLI`、`agentTaskType=vibe`、
  * `chatTriggerType=MANUAL`、顶层 `agentMode`、`sess_` 会话 id 与 `rootConversationId`
  * (见 resolveConversationIdentity);空集合由 `serializeKiroRequest` 省略。语义字段都从
  * `getKiroClientProfile().kas` 取,和 provider 使用同一个 profile 源。

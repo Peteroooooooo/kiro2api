@@ -204,18 +204,19 @@ plugin-derived 据此反演(`gptCacheDerivedBreakdown`):按隐藏推理 = 0 解�
 
 ### kiro-cli V3(KAS)的 wire
 
-网关只模拟 kiro-cli `chat --v3` 一套 wire:对话、工具、subagent 由 KAS(kiro-cli 内嵌的 Node 进程 `@kiro/agent`,首次 `--v3` 时解压到 kiro-cli 数据目录的 `kas/<版本>-<hash>/`)发;登录、OIDC 刷新、GetUsageLimits 仍由 Rust 外壳发。profile 因此分 `kas` / `shell` 两个身份(`kiro/client-profile.ts`)。2.23.1 与 V2 的差异(V2 列 = 守卫禁止回流的形态):
+网关只模拟 kiro-cli `chat --v3` 一套 wire:对话、工具、subagent 由 KAS(kiro-cli 内嵌的 Node 进程 `@kiro/agent`,首次 `--v3` 时解压到 kiro-cli 数据目录的 `kas/<版本>-<hash>/`)发;登录、OIDC 刷新、GetUsageLimits 仍由 Rust 外壳发。profile 因此分 `kas` / `shell` 两个身份(`kiro/client-profile.ts`)。与 V2 的差异(V3 列为 2.34.0 交互会话;V2 列 = 守卫禁止回流的形态):
 
 | 项 | V2(Rust 引擎,不得回流) | V3(KAS,网关现行) |
 |---|---|---|
 | target / 路径 | `AmazonCodeWhispererStreamingService.*`,REST 路径 | `KiroRuntimeService.GenerateAssistantResponse` / `.InvokeMCP`,同 host 路径 `/` |
-| UA | `aws-sdk-rust/… api/codewhispererstreaming/…` | `aws-sdk-js/1.0.0 ua/2.1 os/<platform>#<release> lang/js md/nodejs#… api/kiroruntime#1.0.0 m/N KiroCLI/<ver> KAS/<ver> os/<os> …` |
-| 头 | accept、accept-encoding | 无这两个;GAR 多 `x-amzn-kiro-client-attribution: unrecognized`;都带 `connection: keep-alive` |
-| body | `origin: KIRO_CLI`、每条 user 带 `envState`、assistant 带 `messageId` | `origin: AI_EDITOR`、顶层 `agentMode`、`sess_` id + `rootConversationId`;无 envState / messageId,空集合不发 |
+| UA | `aws-sdk-rust/… api/codewhispererstreaming/…` | `aws-sdk-js/1.0.0 ua/2.1 os/<platform>#<release> lang/js md/nodejs#… api/kiroruntime#1.0.0 m/N KiroCLI/<ver> KAS/<ver> os/<platform> md/appVersion-<ver> app/AmazonQ-For-CLI acp-client/kiro-cli` |
+| 头 | accept、accept-encoding | 无这两个;GAR 多 `x-amzn-kiro-client-attribution: kiro-cli`;都带 `connection: keep-alive` |
+| body | 每条 user 带 `envState`、assistant 带 `messageId` | 顶层 `agentMode`、`sess_` id + `rootConversationId`;无 envState / messageId,空集合不发。`origin: KIRO_CLI` 两者相同 |
 
 - 与 KAS 唯一有意的偏离:system 折进首条 user,不造 `assistant:"I will follow these instructions."`(理由见「注入文本」)。KAS 自己的 `You are Kiro…` 人设不发,网关只发客户端的 system。同一 prompt 下网关与 KAS 的 GAR body 结构逐键一致(键序除外)。
 - axios 会自动补 `accept` / `accept-encoding`,header 值置 `false` 才压得住(`SUPPRESS_AXIOS_DEFAULTS`,真实服务器实测)。
-- 抓包:2.23.1 起非交互路径认 `KIRO_KAS_ENDPOINT` / `KIRO_KAS_CONTROL_PLANE_ENDPOINT`,`scripts/capture-kiro-cli.sh` 用它们把 KAS 指向本地 mock,Rust 外壳仍靠临时 settings。别用 `KIRO_KAS_SERVER_PATH` 包装器:录出来的 UA 是 `KAS/unknown`,与真实启动(`KAS/0.66.8`)不同,不能当画像。2.34.0 录到 KAS 在 UA 末尾追加 `acp-client/<ACP 客户端名>`(2.28.0 的 fixture 里还没有);脚本走非交互路径,所以 fixture 里是 `kiro-cli-non-interactive`,交互式会话的客户端名没录过。
+- **交互与非交互是两种客户端身份**(2.34.0 同一 mock 对录):非交互(`--no-interactive`)发 `origin: AI_EDITOR`、归因头 `unrecognized`、UA 末尾 `acp-client/kiro-cli-non-interactive`、KiroCLI 段 `os/macos`,KAS 人设是「inside the Kiro IDE」;交互会话是 `KIRO_CLI`、`kiro-cli`、`acp-client/kiro-cli`、Node 风格的 `os/darwin`,人设「runs in the command line」。上游按 origin 注入不同的系统前缀(同一 haiku-5.5 请求 6484 对 6518 token,各自缓存)。网关的流量是交互式 agent,对齐交互身份。2.34.0 以前的 fixture 都是非交互录的,那时表里的 `AI_EDITOR` / `unrecognized` 其实是非交互的特征,`KIRO_CLI` 也就被误当成 V2 专属;`acp-client/…` 后缀 2.28.0 的 fixture 里还没有。
+- 抓包:`scripts/capture-kiro-cli.sh` 在 `script` 给的伪终端里跑交互式 TUI。TUI 的 stdin 一 EOF 就退出,所以 stdin 接一个 keepalive 撑着的管道(BSD `script` 不收 FIFO);`--trust-workspace` 只对本次跳过「信任此工作区」、不落盘。`KIRO_KAS_ENDPOINT` / `KIRO_KAS_CONTROL_PLANE_ENDPOINT` 交互与非交互都认(交互 2.34.0 验证),Rust 外壳仍靠临时 settings。别用 `KIRO_KAS_SERVER_PATH` 包装器:录出来的 UA 是 `KAS/unknown`,与真实启动不同,不能当画像。
 - V3 形态的 body(无 envState / messageId、历史 user 不带 context、tool-use-only 的 assistant `content:""`)上游直打全部 200;Codex / Claude Code 真实验收与 V2 基线无回归(Codex 同任务 2.83 对 2.88 credit)。守卫 `test/static/kiro-wire-v3.test.ts`、`test/kiro/provider-v3-wire.test.ts`。
 
 ### 重试头的三个调用点

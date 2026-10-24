@@ -12,6 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
+import { getKiroClientProfile } from '../../src/kiro/client-profile.js';
 import { eventFromFrame } from '../../src/kiro/model/events/base.js';
 import { parseFrame } from '../../src/kiro/parser/frame.js';
 import { seededDoc } from './_harness.mjs';
@@ -58,7 +59,7 @@ const WORDS = Number(process.env.K2C_WORDS ?? 4000);
 const RUN = randomUUID().slice(0, 8);
 
 const user = (content: string) => ({
-  userInputMessage: { content, modelId: MODEL, origin: 'AI_EDITOR' },
+  userInputMessage: { content, modelId: MODEL, origin: getKiroClientProfile().kas.body.origin },
 });
 const asst = (content: string) => ({ assistantResponseMessage: { content } });
 

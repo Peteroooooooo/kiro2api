@@ -6,7 +6,8 @@
  * 客户端这样发。这里扫描去掉注释后的 `src/`,钉死这些 V2 遗留不再出现:
  *   - target `AmazonCodeWhispererStreamingService.*`、UA service `codewhispererstreaming`
  *   - REST 路径 `…kiro.dev/generateAssistantResponse` / `…kiro.dev/mcp`
- *   - body 的 `origin: 'KIRO_CLI'`、`envState`、assistant 的 `messageId`
+ *   - body 的 `envState`、assistant 的 `messageId`
+ * `origin: KIRO_CLI` 不在此列:V3 交互会话同样发它(非交互会话发 `AI_EDITOR`),值来自 fixture。
  * GetUsageLimits 仍由 kiro-cli 的 Rust 外壳发,它的 `AmazonCodeWhispererService` target 不在此列。
  */
 
@@ -24,7 +25,6 @@ const FORBIDDEN: Array<[string, RegExp, (rel: string) => boolean]> = [
   ['V2 streaming target', /AmazonCodeWhispererStreamingService/, () => true],
   ['V2 UA service id', /codewhispererstreaming/, () => true],
   ['V2 REST paths', /kiro\.dev\/(generateAssistantResponse|mcp)\b/, () => true],
-  ['V2 origin', /['"]KIRO_CLI['"]/, () => true],
   ['V2 envState', /\benvState\b/, () => true],
   ['V2 assistant messageId', /\bmessageId\b/, isWireBodyBuilder],
 ];

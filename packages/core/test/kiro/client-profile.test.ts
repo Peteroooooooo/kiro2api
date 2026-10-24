@@ -59,7 +59,8 @@ describe('getKiroClientProfile', () => {
     const profile = getKiroClientProfile();
     expect(profile.mode).toBe('kiro-cli');
 
-    expect(profile.kas.body.origin).toBe('AI_EDITOR');
+    // 交互会话的身份;非交互会话是 AI_EDITOR + 归因头 unrecognized
+    expect(profile.kas.body.origin).toBe('KIRO_CLI');
     expect(profile.kas.body.agentMode).toBe('vibe');
     expect(profile.kas.body.subagentAgentMode).toBe('general-task-execution');
     expect(profile.kas.body.agentTaskType).toBe('vibe');
@@ -74,17 +75,19 @@ describe('getKiroClientProfile', () => {
     );
 
     // KAS 的 GAR 带 attribution、不带 accept;MCP 不带 attribution
-    expect(profile.kas.staticHeaders['x-amzn-kiro-client-attribution']).toBe('unrecognized');
+    expect(profile.kas.staticHeaders['x-amzn-kiro-client-attribution']).toBe('kiro-cli');
     expect(profile.kas.staticHeaders).not.toHaveProperty('accept');
     expect(profile.kas.mcpStaticHeaders).not.toHaveProperty('x-amzn-kiro-client-attribution');
   });
 
-  it('renders the KAS UA with a Node-style and a kiro-cli-style platform token', () => {
+  it('renders the KAS UA with Node-style platform tokens and the interactive client tag', () => {
     const profile = getKiroClientProfile();
     for (const ua of [renderKasUserAgent(profile), renderKasXAmzUserAgent(profile)]) {
       expect(ua).toMatch(/^aws-sdk-js\//);
-      expect(ua).not.toMatch(/\{(jsOs|os|service)\}/);
-      expect(ua).toContain(`os/${kiroOsToken()}`);
+      expect(ua).not.toMatch(/\{(jsOs|platform|os|service)\}/);
+      // 交互会话的 KiroCLI 段用 Node 的 platform(非交互会话是 kiro-cli 风格的 macos / linux)
+      expect(ua).toMatch(new RegExp(` KAS/\\S+ os/${process.platform} `));
+      expect(ua).toMatch(/ acp-client\/kiro-cli$/);
     }
     // user-agent 另带 Node 风格的 `os/<platform>#<release>`
     expect(renderKasUserAgent(profile)).toContain(`os/${process.platform}#${os.release()}`);
@@ -130,6 +133,23 @@ describe('getKiroClientProfile', () => {
     );
   });
 
+  it('templates the bare Node platform token (interactive KiroCLI segment) as {platform}', () => {
+    withProfileFile(
+      {
+        kas: {
+          userAgent: 'custom-js/1.0 os/darwin#25.6.0 KiroCLI/9 os/darwin md/x',
+          xAmzUserAgent: 'KiroCLI/9-os/darwin-md/x',
+        },
+      },
+      () => {
+        const profile = getKiroClientProfile();
+        expect(profile.kas.userAgent).toBe('custom-js/1.0 os/{jsOs} KiroCLI/9 os/{platform} md/x');
+        expect(profile.kas.xAmzUserAgent).toBe('KiroCLI/9-os/{platform}-md/x');
+        expect(renderKasXAmzUserAgent(profile)).toBe(`KiroCLI/9-os/${process.platform}-md/x`);
+      },
+    );
+  });
+
   it('falls back to the built-in V3 snapshot for a V2-era fixture (no `kas` section)', () => {
     withProfileFile(
       {
@@ -144,7 +164,7 @@ describe('getKiroClientProfile', () => {
       () => {
         const profile = getKiroClientProfile();
         expect(profile.kiroCliVersion).toBe('unknown');
-        expect(profile.kas.body.origin).toBe('AI_EDITOR');
+        expect(profile.kas.userAgent).toMatch(/^aws-sdk-js\//);
         expect(requireKasTarget(profile, 'generateAssistantResponse')).toBe(
           'KiroRuntimeService.GenerateAssistantResponse',
         );

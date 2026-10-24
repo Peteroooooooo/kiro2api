@@ -12,7 +12,7 @@
       "agentMode": "vibe",
       "agentTaskType": "vibe",
       "chatTriggerType": "MANUAL",
-      "origin": "AI_EDITOR"
+      "origin": "KIRO_CLI"
     },
     "mcpStaticHeaders": {
       "connection": "keep-alive",
@@ -23,10 +23,10 @@
       "connection": "keep-alive",
       "content-type": "application/x-amz-json-1.0",
       "x-amzn-codewhisperer-optout": "true",
-      "x-amzn-kiro-client-attribution": "unrecognized"
+      "x-amzn-kiro-client-attribution": "kiro-cli"
     },
-    "userAgent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive",
-    "xAmzUserAgent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive"
+    "userAgent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli",
+    "xAmzUserAgent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli"
   },
   "kiroCliVersion": "2.34.0",
   "note": [
@@ -46,9 +46,9 @@
       "headers": {
         "connection": "keep-alive",
         "content-type": "application/x-amz-json-1.0",
-        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kirocontrolplanebearer#1.0.0 m/N,E KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive",
+        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kirocontrolplanebearer#1.0.0 m/N,E KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli",
         "x-amz-target": "KiroControlPlaneBearerService.GetEffectiveEnterpriseManagementResourceWithToken",
-        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive"
+        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli"
       },
       "method": "POST",
       "target": "KiroControlPlaneBearerService.GetEffectiveEnterpriseManagementResourceWithToken",
@@ -62,9 +62,9 @@
       "headers": {
         "connection": "keep-alive",
         "content-type": "application/x-amz-json-1.0",
-        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kirocontrolplanebearer#1.0.0 m/N,E KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive",
+        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kirocontrolplanebearer#1.0.0 m/N,E KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli",
         "x-amz-target": "KiroControlPlaneBearerService.GetProfile",
-        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive"
+        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli"
       },
       "method": "POST",
       "target": "KiroControlPlaneBearerService.GetProfile",
@@ -72,16 +72,16 @@
     },
     {
       "body": {
-        "origin": "AI_EDITOR",
+        "origin": "KIRO_CLI",
         "profileArn": "arn:aws:codewhisperer:us-east-1:000000000000:profile/REDACTED"
       },
       "engine": "kas",
       "headers": {
         "connection": "keep-alive",
         "content-type": "application/x-amz-json-1.0",
-        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kirocontrolplanebearer#1.0.0 m/N,E KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive",
+        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kirocontrolplanebearer#1.0.0 m/N,E KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli",
         "x-amz-target": "KiroControlPlaneBearerService.ListAvailableModels",
-        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive"
+        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli"
       },
       "method": "POST",
       "target": "KiroControlPlaneBearerService.ListAvailableModels",
@@ -99,7 +99,7 @@
             "userInputMessage": {
               "content": "<session_context>\nOnly the last <session_context> block is current; it remains current until a later block supersedes it.\nThe current model is Auto (model selected dynamically on the server).\n</sessio… <truncated>",
               "modelId": "auto",
-              "origin": "AI_EDITOR",
+              "origin": "KIRO_CLI",
               "userInputMessageContext": {
                 "tools": [
                   "list_directory",
@@ -126,9 +126,9 @@
           "history": [
             {
               "userInputMessage": {
-                "content": "You are Kiro, an agentic AI software engineer working inside the Kiro IDE, an AI-powered development environment built on VS Code. You collaborate with the user directly in their editor and workspace.… <truncated>",
+                "content": "You are Kiro CLI, an agentic AI software engineer that runs in the command line. You operate in a terminal environment: there is no graphical editor, file explorer, side panels, buttons, tabs, or othe… <truncated>",
                 "modelId": "auto",
-                "origin": "AI_EDITOR"
+                "origin": "KIRO_CLI"
               }
             },
             {
@@ -145,11 +145,11 @@
       "headers": {
         "connection": "keep-alive",
         "content-type": "application/x-amz-json-1.0",
-        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive",
+        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli",
         "x-amz-target": "KiroRuntimeService.GenerateAssistantResponse",
-        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive",
+        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli",
         "x-amzn-codewhisperer-optout": "true",
-        "x-amzn-kiro-client-attribution": "unrecognized"
+        "x-amzn-kiro-client-attribution": "kiro-cli"
       },
       "method": "POST",
       "target": "KiroRuntimeService.GenerateAssistantResponse",
@@ -157,7 +157,7 @@
     },
     {
       "body": {
-        "origin": "AI_EDITOR",
+        "origin": "KIRO_CLI",
         "profileArn": "arn:aws:codewhisperer:us-east-1:000000000000:profile/REDACTED",
         "version": "2.34.0"
       },
@@ -165,9 +165,9 @@
       "headers": {
         "connection": "keep-alive",
         "content-type": "application/x-amz-json-1.0",
-        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N,E KiroCLI/2.34.0-KAS/0.66.62-os/{os}-md/appVersion-2.34.0-app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive",
+        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N,E KiroCLI/2.34.0-KAS/0.66.62-os/{platform}-md/appVersion-2.34.0-app/AmazonQ-For-CLI acp-client/kiro-cli",
         "x-amz-target": "KiroRuntimeService.GetFeatureConfiguration",
-        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0-KAS/0.66.62-os/{os}-md/appVersion-2.34.0-app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive"
+        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0-KAS/0.66.62-os/{platform}-md/appVersion-2.34.0-app/AmazonQ-For-CLI acp-client/kiro-cli"
       },
       "method": "POST",
       "target": "KiroRuntimeService.GetFeatureConfiguration",
@@ -187,9 +187,9 @@
       "headers": {
         "connection": "keep-alive",
         "content-type": "application/x-amz-json-1.0",
-        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive",
+        "user-agent": "aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli",
         "x-amz-target": "KiroRuntimeService.InvokeMCP",
-        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{os} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli-non-interactive"
+        "x-amz-user-agent": "aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli"
       },
       "method": "POST",
       "target": "KiroRuntimeService.InvokeMCP",

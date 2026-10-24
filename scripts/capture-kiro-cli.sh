@@ -12,13 +12,15 @@
 # 工作原理(都指向本地明文 mock,不做 TLS MITM,也不会打到真实上游):
 #   1. 启动 Node mock:应答 KAS 启动时的预检(ListAvailableModels / GetProfile /
 #      GetFeatureConfiguration / InvokeMCP tools/list),GAR 录下后回 500 让它停下。
-#   2. KAS:`KIRO_KAS_ENDPOINT` / `KIRO_KAS_CONTROL_PLANE_ENDPOINT` 指向 mock,跑
-#      `kiro-cli chat --v3 --no-interactive "ping"`(2.23.1 起非交互路径认这两个变量)。
+#   2. KAS:`KIRO_KAS_ENDPOINT` / `KIRO_KAS_CONTROL_PLANE_ENDPOINT` 指向 mock,在 `script` 给的伪终端
+#      里跑交互式 `kiro-cli chat --v3 "ping"`。录的是交互会话的身份:`--no-interactive` 的 origin /
+#      归因头 / UA 客户端名都不同,上游据此注入不同的系统前缀,而网关的流量是交互式 agent。
 #   3. Rust 外壳:临时把 `api.codewhisperer.service` 等 settings 指向 mock,跑
 #      `kiro-cli profile` 录它的 UA,结束即删除这些 settings。
 #   4. 把捕获结果规范化、脱敏成 profile JSON。
 #
-# 前置条件:本机已安装并登录 kiro-cli(whoami 能通过),已安装 node(≥18)。
+# 前置条件:本机已安装并登录 kiro-cli(whoami 能通过),已安装 node(≥18)与 `script`(macOS 与
+# util-linux 自带)。
 #
 # 用法：
 #   ./scripts/capture-kiro-cli.sh                    # 捕获并写入默认路径
@@ -83,14 +85,19 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v script >/dev/null 2>&1; then
+  echo "错误: 未找到 script(交互会话需要它提供伪终端;macOS 自带,Linux 在 util-linux / bsdutils 里)" >&2
+  exit 1
+fi
+
 if ! "$KIRO2CLAUDE_CLI_BIN" whoami >/dev/null 2>&1; then
   echo "错误: kiro-cli whoami 失败，请先登录 (kiro-cli login)" >&2
   exit 1
 fi
 
-# KAS 的非交互路径 2.23.1 起才认 KIRO_KAS_ENDPOINT;更老的版本无视重定向,抓包用的 "ping" 会
-# 直连真实上游并消耗 credits。触发前校验,版本读不出也中止。
-MIN_KAS_ENDPOINT_VERSION="2.23.1"
+# 交互会话认 KIRO_KAS_ENDPOINT 是在 2.34.0 上验证的(`--trust-workspace` 2.33 起才有);更老的版本
+# 若无视重定向,抓包用的 "ping" 会直连真实上游并消耗 credits。触发前校验,版本读不出也中止。
+MIN_KAS_ENDPOINT_VERSION="2.34.0"
 KIRO2CLAUDE_CLI_VERSION="$("$KIRO2CLAUDE_CLI_BIN" --version 2>/dev/null | awk '{print $NF}')"
 if ! node -e '
   const [v, min] = process.argv.slice(1).map((s) => s.split(".").map((n) => Number.parseInt(n, 10)));
@@ -111,12 +118,29 @@ trap 'cleanup' EXIT INT TERM
 
 CAPTURE_FILE="$WORKDIR/raw.json"
 SERVER_PID=""
+TUI_PID=""
 # 实际成功设置的 endpoint key（cleanup 据此只删自己设过的，不碰未设置的 key）。
 # 注意是 delete 而非恢复原值——脚本不保存原值，原本配过自定义 endpoint 的会丢。
 # 顶部声明，保证 trap 在脚本任意早期失败时引用都安全（set -u 下空数组也合法）。
 declare -a SET_KEYS=()
 
+# 收掉交互会话:先杀 keepalive,TUI 的 stdin 收到 EOF 会自己退出(连带 KAS 子进程),等不到再杀 `script`
+stop_tui() {
+  [[ -n "${TUI_PID:-}" ]] || return 0
+  if [[ -f "$WORKDIR/keepalive.pid" ]]; then
+    kill "$(cat "$WORKDIR/keepalive.pid")" 2>/dev/null || true
+  fi
+  for _ in $(seq 1 20); do
+    kill -0 "$TUI_PID" 2>/dev/null || break
+    sleep 0.25
+  done
+  kill "$TUI_PID" 2>/dev/null || true
+  wait "$TUI_PID" 2>/dev/null || true
+  TUI_PID=""
+}
+
 cleanup() {
+  stop_tui
   if [[ -n "$SERVER_PID" ]]; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
@@ -226,10 +250,27 @@ MOCK_URL="http://127.0.0.1:$PORT"
 # ---------------------------------------------------------------------------
 # 2) KAS:环境变量把 runtime + control plane 都指向 mock
 # ---------------------------------------------------------------------------
-# `--model auto` 与 mock 的 MOCK_MODEL 一致:不写则 KAS 用本机 `chat.defaultModel`,fixture 随机器设置漂移
-echo "→ 触发 chat --v3 --no-interactive (捕获 KAS 的 GenerateAssistantResponse / InvokeMCP 等)"
-(cd "$WORKDIR" && KIRO_KAS_ENDPOINT="$MOCK_URL" KIRO_KAS_CONTROL_PLANE_ENDPOINT="$MOCK_URL" \
-  "$KIRO2CLAUDE_CLI_BIN" chat --v3 --no-interactive --model auto --trust-tools= "ping" >/dev/null 2>&1) || true
+# TUI 要一个 stdin 不关的伪终端(stdin EOF 即退出):`script` 给 pty,stdin 接一个由 keepalive 进程
+# 撑着的管道(BSD `script` 不收 FIFO 作 stdin)。`--trust-workspace` 只对本次启动跳过「信任此工作区」、
+# 不落盘。`--model auto` 与 mock 的 MOCK_MODEL 一致:不写则 KAS 用本机 `chat.defaultModel`,fixture
+# 随机器设置漂移。录到 GAR 即收尾。
+echo "→ 触发交互式 chat --v3 (伪终端里的 TUI,捕获 KAS 的 GenerateAssistantResponse / InvokeMCP 等)"
+TUI_CMD=("$KIRO2CLAUDE_CLI_BIN" chat --v3 --trust-workspace --model auto --trust-tools= ping)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  SCRIPT_ARGS=(-q /dev/null "${TUI_CMD[@]}")
+else
+  SCRIPT_ARGS=(-q -c "$(printf '%q ' "${TUI_CMD[@]}")" /dev/null)
+fi
+{ sleep 120 & echo $! > "$WORKDIR/keepalive.pid"; wait; } 2>/dev/null \
+  | (cd "$WORKDIR" && exec env KIRO_KAS_ENDPOINT="$MOCK_URL" KIRO_KAS_CONTROL_PLANE_ENDPOINT="$MOCK_URL" \
+      TERM="${TERM:-xterm-256color}" script "${SCRIPT_ARGS[@]}" >/dev/null 2>&1) &
+TUI_PID=$!
+for _ in $(seq 1 120); do
+  grep -q 'GenerateAssistantResponse' "$CAPTURE_FILE" 2>/dev/null && break
+  sleep 0.25
+done
+sleep 0.5
+stop_tui
 
 # ---------------------------------------------------------------------------
 # 3) Rust 外壳:临时 settings 覆盖,录它的 UA
@@ -277,18 +318,20 @@ const shellSample = raw.find(isShell);
 
 if (!gar) {
   console.error('错误: 没有捕获到 KAS 的 GenerateAssistantResponse。kiro-cli 可能不支持 --v3,');
-  console.error('      或不认 KIRO_KAS_ENDPOINT(需 2.23.1+)。fixture 未写入。');
+  console.error('      或交互会话没起来 / 不认 KIRO_KAS_ENDPOINT(需 2.34.0+)。fixture 未写入。');
   process.exit(1);
 }
 
-// KAS 的 UA 有两个平台 token:`os/darwin#25.6.0`(Node 的 platform#release)与 kiro-cli 风格的
-// `os/macos`,分别抽成 `{jsOs}` / `{os}`,runtime 按实际平台还原。`md/nodejs#…` 是 kiro-cli
-// 自带 Node 的版本,不是网关的,原样保留。先替换 `{jsOs}`,否则 `os/linux#…` 会被第二条吞掉。
+// KAS 的 UA 有两个平台 token:`os/darwin#25.6.0`(Node 的 platform#release)与 KiroCLI 段的
+// `os/darwin`(交互会话用 Node 的 platform;非交互会话是 kiro-cli 风格的 `os/macos`),分别抽成
+// `{jsOs}` / `{platform}`(/ `{os}`),runtime 按实际平台还原。`md/nodejs#…` 是 kiro-cli 自带 Node
+// 的版本,不是网关的,原样保留。先替换 `{jsOs}`,否则 `os/linux#…` 会被后面的规则吞掉。
 function templateKasUa(ua) {
   if (!ua) return null;
   return ua
     .replace(/\bos\/(darwin|linux|win32)#[^\s]+/g, 'os/{jsOs}')
-    .replace(/\bos\/(macos|linux|windows)\b/g, 'os/{os}');
+    .replace(/\bos\/(darwin|linux|win32)\b/g, 'os/{platform}')
+    .replace(/\bos\/(macos|windows)\b/g, 'os/{os}');
 }
 
 // Rust 外壳的 UA:`api/<service>/<ver>` 的 service 抽成 `{service}`,os 抽成 `{os}`。
@@ -319,8 +362,9 @@ function redactBody(bodyText) {
         } else if (k === 'content' && typeof obj[k] === 'string') {
           // KAS 注入的时间戳 / 路径每次不同,归一化后重抓不产生无意义 diff
           obj[k] = obj[k].replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})/g, '<captured_at>');
+          // TUI 报的是解析过符号链接的路径(macOS 的 /var → /private/var),两种都换;长的先换
           const cwd = process.env.KIRO2CLAUDE_CAPTURE_CWD;
-          if (cwd) obj[k] = obj[k].split(cwd).join('<cwd>');
+          if (cwd) for (const p of [fs.realpathSync(cwd), cwd]) obj[k] = obj[k].split(p).join('<cwd>');
           const home = process.env.KIRO2CLAUDE_CAPTURE_HOME;
           if (home) obj[k] = obj[k].split(home).join('<home>');
           // 截断过长的 prompt / tool spec 描述，避免 fixture 膨胀

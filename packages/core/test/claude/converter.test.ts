@@ -293,7 +293,7 @@ describe('convertRequest - kiro-cli V3 (KAS) body shape', () => {
       serializeKiroRequest(toKiroRequest(convertRequest(req, { identityOverride: false }))),
     );
 
-  it('origin AI_EDITOR on current and history messages, no V2 envState / messageId', () => {
+  it('origin from the KAS profile on current and history messages, no V2 envState / messageId', () => {
     const body = wire(
       baseRequest({
         messages: [
@@ -313,9 +313,10 @@ describe('convertRequest - kiro-cli V3 (KAS) body shape', () => {
       }),
     );
     const cs = body.conversationState;
-    expect(cs.currentMessage.userInputMessage.origin).toBe('AI_EDITOR');
+    // 交互会话的身份(fixture 录自交互式 TUI)
+    expect(cs.currentMessage.userInputMessage.origin).toBe('KIRO_CLI');
     for (const h of cs.history) {
-      if (h.userInputMessage) expect(h.userInputMessage.origin).toBe('AI_EDITOR');
+      if (h.userInputMessage) expect(h.userInputMessage.origin).toBe('KIRO_CLI');
     }
     expect(cs.agentTaskType).toBe('vibe');
     expect(cs.chatTriggerType).toBe('MANUAL');
@@ -323,7 +324,6 @@ describe('convertRequest - kiro-cli V3 (KAS) body shape', () => {
     const text = JSON.stringify(body);
     expect(text).not.toContain('envState');
     expect(text).not.toContain('messageId');
-    expect(text).not.toContain('KIRO_CLI');
   });
 
   it('omits empty collections like KAS: no context on plain history users, no empty toolResults/images', () => {

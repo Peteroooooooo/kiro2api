@@ -6,7 +6,7 @@
 |---|---|
 | `_harness.mjs` | 所有脚本共用:env / 发请求 / 解 SSE / 号段校验 / **两套协议不变量** / 汇总退出码。新脚本从这里拿,别各写一份缩水的不变量集 |
 | `_real-provider.ts` / `_marker-png.mjs` | 共用件:直打上游的探针从前者拿 provider + token manager(读仓库根 `.env` 与 kiro-cli 凭据);后者生成确定性 5×7 点阵数字图,图片探针共用 |
-| `kiro-cli-capture-proxy.mjs` 💰 | 转发型录制代理:kiro-cli `chat --v3`(`KIRO_KAS_ENDPOINT` / `KIRO_KAS_CONTROL_PLANE_ENDPOINT` 指过来,2.23.1+ 非交互也认)→ 本机端口 → 真实上游,请求脱敏、响应原始字节 + 解码帧落盘;看上游怎么回、下一轮 history 怎么回传。V2 三个 endpoint setting 仍可用于对照 |
+| `kiro-cli-capture-proxy.mjs` 💰 | 转发型录制代理:kiro-cli `chat --v3`(`KIRO_KAS_ENDPOINT` / `KIRO_KAS_CONTROL_PLANE_ENDPOINT` 指过来,交互与非交互都认,交互 2.34.0 验证)→ 本机端口 → 真实上游,请求脱敏、响应原始字节 + 解码帧落盘;看上游怎么回、下一轮 history 怎么回传。V2 三个 endpoint setting 仍可用于对照 |
 | `reasoning-roundtrip-live.mjs` 💰 | 走网关的原生 reasoning 验收:签名回传 / 坏签名剥离重试 / `display: omitted` / effort 计费 / GPT·sonnet-4.6 / 流式不变量;改 thinking·effort 相关 converter **必跑** |
 | `reasoning-wire-probe.ts` 💰 | 直打上游:effort 放法 × thinking disabled/omitted × 顶层 systemPrompt × history `reasoningContent` 正常/坏签名/无签名(body 取 profile 的 KAS 形态);`K2C_PROBE_ONLY` 挑场景、`K2C_PROBE_PROMPT` 换题 |
 | `kiro-cli-probe.ts` | 反向驱动真实 kiro-cli:伪造 event-stream 让它执行工具、注入错误码看重试策略、`PROBE_STREAM_SHAPE=text-eof` 看它对无尾帧 EOF 的处理 |

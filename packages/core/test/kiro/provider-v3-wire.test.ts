@@ -42,7 +42,7 @@ describe('upstream wire follows kiro-cli V3 (KAS)', () => {
     expect(req.url).toBe('https://runtime.us-east-1.kiro.dev/');
     expect(req.headers['x-amz-target']).toBe('KiroRuntimeService.GenerateAssistantResponse');
     expect(req.headers['user-agent']).toMatch(/^aws-sdk-js\/.* api\/kiroruntime#/);
-    expect(req.headers['x-amzn-kiro-client-attribution']).toBe('unrecognized');
+    expect(req.headers['x-amzn-kiro-client-attribution']).toBe('kiro-cli');
     expect(req.headers['x-amzn-codewhisperer-optout']).toBe('true');
     expect(req.headers.connection).toBe('keep-alive');
     expect(req.headers.accept).toBe(false);

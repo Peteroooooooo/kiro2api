@@ -49,7 +49,8 @@ export interface KasIdentity {
   /** InvokeMCP 的静态头(KAS 不给 MCP 发 attribution 头) */
   mcpStaticHeaders: Record<string, string>;
   /**
-   * UA 模板:`{jsOs}` 渲染成 Node 风格的 `<platform>#<release>`,`{os}` 渲染成 kiro-cli 风格的
+   * UA 模板:`{jsOs}` 渲染成 Node 风格的 `<platform>#<release>`,`{platform}` 渲染成 Node 的
+   * `process.platform`(交互会话的 KiroCLI 段用它),`{os}` 渲染成 kiro-cli 风格的
    * `macos` / `linux` / `windows`。`md/nodejs#…` 是 kiro-cli 自带 Node 的版本,原样保留。
    */
   userAgent: string;
@@ -91,7 +92,7 @@ export interface KiroClientProfile {
 
 /**
  * 兜底 profile。当 fixture 文件不存在、加载失败或缺 `kas` 段(V2 形态)时使用。
- * 数值来源:2026-09 kiro-cli 2.23.1 `chat --v3` 实测抓包(一次性快照,不维护同步)。
+ * 数值来源:2026-10 kiro-cli 2.34.0 交互式 `chat --v3` 实测抓包(一次性快照,不维护同步)。
  * 例外:`x-amzn-codewhisperer-optout` 固定 `'true'`(项目隐私硬约束,绝不参与
  * 上游训练 / 遥测),不取抓包值——与 fixture 的归一化立场一致。
  *
@@ -109,7 +110,7 @@ const FALLBACK_PROFILE: KiroClientProfile = {
       'content-type': 'application/x-amz-json-1.0',
       // 隐私硬约束:始终 opt-out,绝不让对话数据被上游用于训练。与 fixture 同立场。
       'x-amzn-codewhisperer-optout': 'true',
-      'x-amzn-kiro-client-attribution': 'unrecognized',
+      'x-amzn-kiro-client-attribution': 'kiro-cli',
       connection: 'keep-alive',
     },
     mcpStaticHeaders: {
@@ -118,15 +119,15 @@ const FALLBACK_PROFILE: KiroClientProfile = {
       connection: 'keep-alive',
     },
     userAgent:
-      'aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N KiroCLI/2.23.1 KAS/0.66.8 os/{os} md/appVersion-2.23.1 app/AmazonQ-For-CLI',
+      'aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kiroruntime#1.0.0 m/N KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli',
     xAmzUserAgent:
-      'aws-sdk-js/1.0.0 KiroCLI/2.23.1 KAS/0.66.8 os/{os} md/appVersion-2.23.1 app/AmazonQ-For-CLI',
+      'aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli',
     amzTargets: {
       generateAssistantResponse: 'KiroRuntimeService.GenerateAssistantResponse',
       invokeMcp: 'KiroRuntimeService.InvokeMCP',
     },
     body: {
-      origin: 'AI_EDITOR',
+      origin: 'KIRO_CLI',
       agentMode: 'vibe',
       subagentAgentMode: 'general-task-execution',
       agentTaskType: 'vibe',
@@ -141,9 +142,9 @@ const FALLBACK_PROFILE: KiroClientProfile = {
       'accept-encoding': 'gzip',
     },
     userAgent:
-      'aws-sdk-rust/1.3.10 ua/2.1 api/{service}/0.1.10231 os/{os} lang/rust/1.92.0 md/appVersion-2.23.1 app/AmazonQ-For-CLI',
+      'aws-sdk-rust/1.3.10 ua/2.1 api/{service}/0.1.10231 os/{os} lang/rust/1.94.1 md/appVersion-2.34.0 app/AmazonQ-For-CLI',
     xAmzUserAgent:
-      'aws-sdk-rust/1.3.10 ua/2.1 api/{service}/0.1.10231 os/{os} lang/rust/1.92.0 m/F,C app/AmazonQ-For-CLI',
+      'aws-sdk-rust/1.3.10 ua/2.1 api/{service}/0.1.10231 os/{os} lang/rust/1.94.1 m/F,C app/AmazonQ-For-CLI',
     amzTargets: { getUsageLimits: 'AmazonCodeWhispererService.GetUsageLimits' },
   },
 };
@@ -154,15 +155,17 @@ const FALLBACK_PROFILE: KiroClientProfile = {
 
 /**
  * 把 UA 里的具体平台 token 换回占位符:Node 风格的 `os/<platform>#<release>` → `os/{jsOs}`,
- * kiro-cli 风格的 `os/macos|linux|windows` → `os/{os}`。
+ * 不带 release 的 `os/darwin|win32` → `os/{platform}`,kiro-cli 风格的 `os/macos|linux|windows`
+ * → `os/{os}`(`linux` 两种风格同名,渲染结果一样)。
  *
  * `scripts/capture-kiro-cli.sh` 写 fixture 时已经做过,这里给手工编辑的 fixture 兜底,
  * 保证 macOS 抓的画像部署到 Linux 容器也不会暴露抓包机平台。先换 `{jsOs}`,否则
- * `os/linux#…` 会被第二条规则截成 `os/{os}#…`。
+ * `os/linux#…` 会被后面的规则截成 `os/{os}#…`。
  */
 function normalizeUa(ua: string): string {
   return ua
     .replace(/\bos\/(darwin|linux|win32)#[^\s]+/g, 'os/{jsOs}')
+    .replace(/\bos\/(darwin|win32)\b/g, 'os/{platform}')
     .replace(/\bos\/(macos|linux|windows)\b/g, 'os/{os}');
 }
 
@@ -351,6 +354,7 @@ export function reloadKiroClientProfile(): KiroClientProfile {
 function renderPlaceholders(template: string): string {
   return template
     .replace('{jsOs}', JS_OS_TOKEN)
+    .replace('{platform}', process.platform)
     .replace('{os}', currentOsToken())
     .replace('{service}', SHELL_SERVICE_ID);
 }

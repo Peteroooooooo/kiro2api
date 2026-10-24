@@ -82,7 +82,7 @@ openai/                 OpenAI 兼容层(import claude/kiro/shared,不被反向�
 | 网关往对话里塞了哪些文本 | `buildSystemPrefix` + `foldSystemIntoFirstUserMessage`(Kiro 消息层,首条 user 最前、图例之前);其余 = `converter.ts` 文件头导出常量 + `prependImageLegend` / `imagePlaceholder` |
 | 客户端中途插入的内容会不会丢 | 只走 `foldSystemMessages` + 末尾 user 连串 = 当前轮;其它 role 400 `InvalidRole`。验证工具见 manual README |
 | 上游 status → 下游 status / 容量不足三形态 / 额度耗尽 | 对话:`classifyErrorBody` + `matchQuotaExhausted`(`kiro/provider-error.ts`)→ `classifyProviderError`(`claude/error-mapper.ts`);`/kiro/usage`:`translateUsageError`(`routes/kiro.ts`);`MODEL_CAPACITY_REASONS` 头注释(`kiro/provider-error.ts`)|
-| 上游 wire(kiro-cli V3 / KAS)/ fixture 升版本 | `fixtures/kiro-cli-profile.json`(`kas` / `shell` 两个身份)+ `kiro/client-profile.ts`;`scripts/capture-kiro-cli.sh`(`KIRO_KAS_ENDPOINT` 指向 mock)→ commit `fixtures/`,版本号由 `.releaserc.json` 从 fixture 派生 |
+| 上游 wire(kiro-cli V3 / KAS)/ fixture 升版本 | `fixtures/kiro-cli-profile.json`(`kas` / `shell` 两个身份)+ `kiro/client-profile.ts`;`scripts/capture-kiro-cli.sh`(伪终端里跑交互式 TUI,`KIRO_KAS_ENDPOINT` 指向 mock)→ commit `fixtures/`,版本号由 `.releaserc.json` 从 fixture 派生 |
 | 重试头 | `applyRetryHeaders`(`kiro/retry-executor.ts`)唯一 owner;三个调用点与红线见 PITFALLS「重试头」;守卫 `test/kiro/retry-headers.test.ts` |
 | plugin 注入 `usage` / `kiro.*` meta 键 | `event.addExtension` / `overrideStandardField`;meta 键 = `buildKiroUsageFinishEvent`,文档 `plugin-api/src/types.ts` `getMeta` + PLUGIN-DEVELOPMENT「Meta 键」,守卫 `test/static/usage-meta-contract.test.ts`,**加键同改三处** |
 | 上游已扣费但没记账 | `isMeteringLost`(`claude/stream.ts`),估规模前读其头注释的口径偏差 |
@@ -163,7 +163,7 @@ openai/                 OpenAI 兼容层(import claude/kiro/shared,不被反向�
 
 ### 请求转换 · 工具(Claude→Kiro)
 
-- ★ **上游 wire 只有 kiro-cli V3(KAS)一套**:target / UA / 头 / body 全部取 profile 的 `kas` 身份(GetUsageLimits 走 `shell`);唯一有意偏离是 system 折叠(见下条);别把 V2 的 envState / messageId / `KIRO_CLI` / REST 路径加回来。守卫 `test/static/kiro-wire-v3.test.ts` + `test/kiro/provider-v3-wire.test.ts`;差异表见 PITFALLS「kiro-cli V3(KAS)的 wire」
+- ★ **上游 wire 只有 kiro-cli V3(KAS)一套**:target / UA / 头 / body 全部取 profile 的 `kas` 身份(GetUsageLimits 走 `shell`);唯一有意偏离是 system 折叠(见下条);别把 V2 的 envState / messageId / REST 路径加回来;身份取 kiro-cli 交互会话(`origin: KIRO_CLI` 不是 V2 遗留,非交互身份上游注入的系统前缀不同)。守卫 `test/static/kiro-wire-v3.test.ts` + `test/kiro/provider-v3-wire.test.ts`;差异表见 PITFALLS「kiro-cli V3(KAS)的 wire」
 
 - ★ **注入文本**:system 没有 wire 通道,`buildSystemPrefix` → `foldSystemIntoFirstUserMessage` 在 Kiro 消息层拼进首条 user;网关不造任何 assistant 轮次;中途插入的 `role:system` 只走 `foldSystemMessages`;其它 role 400 `InvalidRole`;OpenAI 侧只提升开头的 system/developer。守卫 `test/static/no-fabricated-turns.test.ts` + `converter.test.ts` system 折叠组
 - **core 不发 cachePoint**:Kiro 静默忽略 `cache_control`,`convertTools` 只输出 `{toolSpecification}`
