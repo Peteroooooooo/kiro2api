@@ -214,7 +214,7 @@ plugin-derived 据此反演(`gptCacheDerivedBreakdown`):按隐藏推理 = 0 解�
 
 - 与 KAS 唯一有意的偏离:system 折进首条 user,不造 `assistant:"I will follow these instructions."`(理由见「注入文本」)。KAS 自己的 `You are Kiro…` 人设不发,网关只发客户端的 system。同一 prompt 下网关与 KAS 的 GAR body 结构逐键一致(键序除外)。
 - axios 会自动补 `accept` / `accept-encoding`,header 值置 `false` 才压得住(`SUPPRESS_AXIOS_DEFAULTS`,真实服务器实测)。
-- 抓包:2.23.1 起非交互路径认 `KIRO_KAS_ENDPOINT` / `KIRO_KAS_CONTROL_PLANE_ENDPOINT`,`scripts/capture-kiro-cli.sh` 用它们把 KAS 指向本地 mock,Rust 外壳仍靠临时 settings。别用 `KIRO_KAS_SERVER_PATH` 包装器:录出来的 UA 是 `KAS/unknown`,与真实启动(`KAS/0.66.8`)不同,不能当画像。
+- 抓包:2.23.1 起非交互路径认 `KIRO_KAS_ENDPOINT` / `KIRO_KAS_CONTROL_PLANE_ENDPOINT`,`scripts/capture-kiro-cli.sh` 用它们把 KAS 指向本地 mock,Rust 外壳仍靠临时 settings。别用 `KIRO_KAS_SERVER_PATH` 包装器:录出来的 UA 是 `KAS/unknown`,与真实启动(`KAS/0.66.8`)不同,不能当画像。2.34.0 录到 KAS 在 UA 末尾追加 `acp-client/<ACP 客户端名>`(2.28.0 的 fixture 里还没有);脚本走非交互路径,所以 fixture 里是 `kiro-cli-non-interactive`,交互式会话的客户端名没录过。
 - V3 形态的 body(无 envState / messageId、历史 user 不带 context、tool-use-only 的 assistant `content:""`)上游直打全部 200;Codex / Claude Code 真实验收与 V2 基线无回归(Codex 同任务 2.83 对 2.88 credit)。守卫 `test/static/kiro-wire-v3.test.ts`、`test/kiro/provider-v3-wire.test.ts`。
 
 ### 重试头的三个调用点
