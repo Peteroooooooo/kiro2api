@@ -477,20 +477,22 @@ describe('deriveKiroUsage — sonnet-5.5 专属', () => {
 // ============================================================================
 // 直打 KiroRuntimeService 标定(effort=none、单词输出):cold = 新 conversationId;warm1 =
 // 同会话续一轮(上一请求 13626 token 全命中 + 新增 17);resend = 同会话原样重发。
-// 输出 "OK" 按 1 个可见 token 计。
+// 输出 "OK" 按 1 个可见 token 计。luna 当时的倍率是 1.1,现为 0.6(上游按倍率计价,见
+// GPT_RATE_MULTIPLIER 注释),其 credits 按倍率比换算到现行计价。
+const LUNA_RERATE = 0.6 / 1.1;
 
 describe('deriveKiroUsage — GPT branch (cache inverted, cost anchored)', () => {
   // [model, total tokens (contextUsage, 含输出), credits]
   const COLD: Array<[string, number, number]> = [
-    ['gpt-5.6-luna', 13626, 0.2490835959369818],
-    ['gpt-5.6-luna', 49804, 0.9090471116915424],
+    ['gpt-5.6-luna', 13626, 0.2490835959369818 * LUNA_RERATE],
+    ['gpt-5.6-luna', 49804, 0.9090471116915424 * LUNA_RERATE],
     ['gpt-5.6-sol', 13626, 0.9963343837479272],
     ['gpt-5.6-sol', 49804, 3.6361884467661696],
     ['gpt-5.6-terra', 25693, 0.93842258159204],
   ];
   const RESEND: Array<[string, number, number]> = [
-    ['gpt-5.6-luna', 13626, 0.025488073548922047],
-    ['gpt-5.6-luna', 49804, 0.09148442512437815],
+    ['gpt-5.6-luna', 13626, 0.025488073548922047 * LUNA_RERATE],
+    ['gpt-5.6-luna', 49804, 0.09148442512437815 * LUNA_RERATE],
     ['gpt-5.6-sol', 13626, 0.10195229419568819],
     ['gpt-5.6-sol', 49804, 0.3659377004975126],
     ['gpt-5.6-terra', 25693, 0.09500168606965172],
@@ -520,17 +522,29 @@ describe('deriveKiroUsage — GPT branch (cache inverted, cost anchored)', () =>
 
   it('next turn in the same conversation: cache_read ≈ the previous request total', () => {
     // luna warm1:上一请求(cold)总量 13626,本次 13643
-    const out = deriveKiroUsage('gpt-5.6-luna', 13643, 1, 0.025798189635157537);
+    const out = deriveKiroUsage('gpt-5.6-luna', 13643, 1, 0.025798189635157537 * LUNA_RERATE);
     expect(out.cacheReadInputTokens).toBeGreaterThan(13626 - 50);
     expect(out.cacheReadInputTokens).toBeLessThanOrEqual(13643);
   });
 
   it('hidden reasoning can only lower the derived cache_read (never over-reports)', () => {
-    const base = deriveKiroUsage('gpt-5.6-luna', 13643, 1, 0.025798189635157537);
-    const withReasoning = deriveKiroUsage('gpt-5.6-luna', 13643, 1, 0.025798189635157537 + 0.05);
+    const base = deriveKiroUsage('gpt-5.6-luna', 13643, 1, 0.025798189635157537 * LUNA_RERATE);
+    const withReasoning = deriveKiroUsage(
+      'gpt-5.6-luna',
+      13643,
+      1,
+      0.025798189635157537 * LUNA_RERATE + 0.05,
+    );
     expect(withReasoning.cacheReadInputTokens).toBeLessThan(base.cacheReadInputTokens);
     // credits 高于冷价(推理 / 输出很多)→ 截到 0,不出现负数
     expect(deriveKiroUsage('gpt-5.6-luna', 13626, 1, 5).cacheReadInputTokens).toBe(0);
+  });
+
+  it('同一请求 terra / luna:credits 比等于倍率比,反演出同样的命中', () => {
+    // 2026-10-24 同一文档、各自新会话直打
+    const terra = deriveKiroUsage('gpt-5.6-terra', 6618, 1, 0.2236597291873964);
+    const luna = deriveKiroUsage('gpt-5.6-luna', 6618, 1, 0.060998107960199006);
+    expect(luna.cacheReadInputTokens).toBe(terra.cacheReadInputTokens);
   });
 
   it('Codex alias (gpt-5-codex) is priced as sol', () => {

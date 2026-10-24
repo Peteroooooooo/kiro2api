@@ -154,7 +154,7 @@ code mode 的 `additional_tools` 里**没有** `web_search`(`tools.web_search=tr
 
 ### GPT credit 锚定与缓存反演
 
-Kiro 不在 usage 里给缓存字段,折扣只落在 credits 上。GPT 的计费公式可以精确标定(2026-09-23,effort=none + 单词输出直打 V3 target):`credits = 倍率 × [k_in·(未命中 + 0.1·命中) + k_out·输出]`,`k_in = 1.6584e-5`、`k_out/k_in = 6.66`(公开价 $1.5 / $10 同比),倍率 = rateMultiplier(sol 4.4 / terra 2.2 / luna 1.1,三者逐点吻合)。缓存价恰为冷价的 0.1×;命中 = 同 conversationId 里此前请求的前缀(另有约 7 token 固定尾巴不进缓存;同一 id 下多段前缀互不挤占,见「会话身份映射到 kiro-cli」);**换 conversationId 发同样内容 credit 与冷请求逐位相同**——每请求随机 id 时测不到任何缓存。
+Kiro 不在 usage 里给缓存字段,折扣只落在 credits 上。GPT 的计费公式可以精确标定(2026-09-23,effort=none + 单词输出直打 V3 target):`credits = 倍率 × [k_in·(未命中 + 0.1·命中) + k_out·输出]`,`k_in = 1.6584e-5`、`k_out/k_in = 6.66`(公开价 $1.5 / $10 同比),倍率 = rateMultiplier(当时 sol 4.4 / terra 2.2 / luna 1.1,三者逐点吻合;luna 后来降到 0.6,2026-10-24 同一请求 terra / luna 的 credits 比 0.2727 = 0.6 / 2.2,仍严格按倍率)。缓存价恰为冷价的 0.1×;命中 = 同 conversationId 里此前请求的前缀(另有约 7 token 固定尾巴不进缓存;同一 id 下多段前缀互不挤占,见「会话身份映射到 kiro-cli」);**换 conversationId 发同样内容 credit 与冷请求逐位相同**——每请求随机 id 时测不到任何缓存。
 
 plugin-derived 据此反演(`gptCacheDerivedBreakdown`):按隐藏推理 = 0 解命中数,推理成本被计入未命中输入,所以推理只会让 `cache_read` 低估(Codex 长会话回放:effort=low 命中 95.9–99.6%,high 85.5–97.8%;冷请求 ≈ 0)。成本仍锚定 `credits×0.04`(× multiplier),status 保持 `gpt_credit_anchored`。**绝不给 GPT 填 `CLAUDE_PRICE_USD_PER_TOK`**:Claude 的系数与缓存比例(0.5276)和 GPT 不同,分流必须在价格表查询**前**。
 

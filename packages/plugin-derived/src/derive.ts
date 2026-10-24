@@ -476,7 +476,8 @@ function passthroughBreakdown(
  *     credits = 倍率 × [ GPT_K_IN · (未命中 + GPT_CACHE_READ_RATIO · 命中) + GPT_K_OUT · 输出 ]
  *
  * - luna 冷请求 13.6K / 25.7K / 49.8K / 98.0K token 四点共线,斜率 ÷ 1.1 = GPT_K_IN;sol / terra
- *   逐点等于 luna × 4 / × 2,即上游 `rateMultiplier`(4.4 / 2.2 / 1.1)。
+ *   逐点等于 luna × 4 / × 2,即上游 `rateMultiplier`(当时 4.4 / 2.2 / 1.1)。luna 后来降到 0.6:
+ *   2026-10-24 同一请求 terra / luna 的 credits 比 0.2727 = 0.6 / 2.2,仍严格按倍率计价。
  * - 同 conversationId 重发:斜率恰为冷价的 1/10 → 缓存价 0.1×(OpenAI 公开折扣),命中 = 同会话
  *   此前请求的前缀,只差约 7 token 的固定尾巴。**换 conversationId 完全不命中**,每请求
  *   随机 id 测不出任何缓存。
@@ -487,7 +488,7 @@ const GPT_K_IN = 1.6584e-5;
 const GPT_K_OUT = 1.1048e-4;
 const GPT_CACHE_READ_RATIO = 0.1;
 /** 上游 `ListAvailableModels` 的 rateMultiplier;新增 GPT 变体时与 core `mapModel` 同改。 */
-const GPT_RATE_MULTIPLIER = { sol: 4.4, terra: 2.2, luna: 1.1 } as const;
+const GPT_RATE_MULTIPLIER = { sol: 4.4, terra: 2.2, luna: 0.6 } as const;
 
 /**
  * GPT-5.6 系列:由 credits 反演缓存命中,成本仍锚定 credits×0.04。
