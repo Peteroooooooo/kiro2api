@@ -1,3 +1,19 @@
+# [1.12.0](https://github.com/yupanzi/kiro2claude/compare/v1.11.0...v1.12.0) (2026-10-25)
+
+
+### Bug Fixes
+
+* **core:** GPT context window 默认按上游现行分母 922000 换算 ([82992cc](https://github.com/yupanzi/kiro2claude/commit/82992ccc6a1a5c52c4a4e21341f151071770b166))
+* **kiro:** 上游身份对齐 kiro-cli 交互会话,抓包改录交互式 TUI ([08cfe13](https://github.com/yupanzi/kiro2claude/commit/08cfe135b6578930472e7a4b849136601410e3c0))
+* **kiro:** 升 kiro-cli fixture 到 2.34.0 ([a22475d](https://github.com/yupanzi/kiro2claude/commit/a22475d2e477c0c8955d9ecc36b7b3eff0c1250b))
+* **plugin-derived:** GPT 超过 272K 按整单双倍反演缓存 ([8fe73d6](https://github.com/yupanzi/kiro2claude/commit/8fe73d663d19427fa5760845a8edcdfca7e72284))
+* **plugin-derived:** gpt-5.6-luna 按上游现行倍率 0.6 反演缓存 ([8cff0e1](https://github.com/yupanzi/kiro2claude/commit/8cff0e14c2093c2423267e234075a0472152c31c))
+
+
+### Features
+
+* **core:** 支持 claude-haiku-5.5 ([60a6ce8](https://github.com/yupanzi/kiro2claude/commit/60a6ce87b85da8200dce62beb8b90457028f0d23))
+
 # [1.11.0](https://github.com/yupanzi/kiro2claude/compare/v1.10.1...v1.11.0) (2026-10-07)
 
 
