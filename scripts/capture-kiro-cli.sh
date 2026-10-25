@@ -124,16 +124,13 @@ TUI_PID=""
 # 顶部声明，保证 trap 在脚本任意早期失败时引用都安全（set -u 下空数组也合法）。
 declare -a SET_KEYS=()
 
-# 收掉交互会话:先杀 keepalive,TUI 的 stdin 收到 EOF 会自己退出(连带 KAS 子进程),等不到再杀 `script`
+# 收掉交互会话:结束 `script` 即关闭伪终端,TUI 收到挂断连带 KAS 子进程退出(raw 模式下 stdin EOF
+# 不一定送得到,不靠它);keepalive 一并杀掉
 stop_tui() {
   [[ -n "${TUI_PID:-}" ]] || return 0
   if [[ -f "$WORKDIR/keepalive.pid" ]]; then
     kill "$(cat "$WORKDIR/keepalive.pid")" 2>/dev/null || true
   fi
-  for _ in $(seq 1 20); do
-    kill -0 "$TUI_PID" 2>/dev/null || break
-    sleep 0.25
-  done
   kill "$TUI_PID" 2>/dev/null || true
   wait "$TUI_PID" 2>/dev/null || true
   TUI_PID=""
@@ -267,9 +264,9 @@ fi
 TUI_PID=$!
 for _ in $(seq 1 120); do
   grep -q 'GenerateAssistantResponse' "$CAPTURE_FILE" 2>/dev/null && break
+  kill -0 "$TUI_PID" 2>/dev/null || break
   sleep 0.25
 done
-sleep 0.5
 stop_tui
 
 # ---------------------------------------------------------------------------
@@ -323,9 +320,10 @@ if (!gar) {
 }
 
 // KAS 的 UA 有两个平台 token:`os/darwin#25.6.0`(Node 的 platform#release)与 KiroCLI 段的
-// `os/darwin`(交互会话用 Node 的 platform;非交互会话是 kiro-cli 风格的 `os/macos`),分别抽成
-// `{jsOs}` / `{platform}`(/ `{os}`),runtime 按实际平台还原。`md/nodejs#…` 是 kiro-cli 自带 Node
-// 的版本,不是网关的,原样保留。先替换 `{jsOs}`,否则 `os/linux#…` 会被后面的规则吞掉。
+// `os/darwin`(Node 的 platform),分别抽成 `{jsOs}` / `{platform}`,runtime 按实际平台还原;
+// `{os}` 那条只为非交互会话录的老 fixture。规则与 client-profile.ts 的 normalizeKasUa /
+// normalizeShellUa 逐条一致(两处同改)。`md/nodejs#…` 是 kiro-cli 自带 Node 的版本,不是网关的,
+// 原样保留。先替换 `{jsOs}`,否则 `os/linux#…` 会被后面的规则吞掉。
 function templateKasUa(ua) {
   if (!ua) return null;
   return ua

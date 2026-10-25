@@ -154,19 +154,25 @@ const FALLBACK_PROFILE: KiroClientProfile = {
 // ---------------------------------------------------------------------------
 
 /**
- * 把 UA 里的具体平台 token 换回占位符:Node 风格的 `os/<platform>#<release>` → `os/{jsOs}`,
- * 不带 release 的 `os/darwin|win32` → `os/{platform}`,kiro-cli 风格的 `os/macos|linux|windows`
- * → `os/{os}`(`linux` 两种风格同名,渲染结果一样)。
+ * 把 UA 里的具体平台 token 换回占位符,按身份分开(两种身份的平台写法不同):
+ * - KAS:Node 风格的 `os/<platform>#<release>` → `os/{jsOs}`,KiroCLI 段不带 release 的 Node 平台名
+ *   `os/darwin|linux|win32` → `os/{platform}`(交互会话),kiro-cli 风格的 `os/macos|windows` → `os/{os}`
+ *   (非交互会话的老 fixture);
+ * - Rust 外壳:kiro-cli 风格的 `os/macos|linux|windows` → `os/{os}`。
  *
- * `scripts/capture-kiro-cli.sh` 写 fixture 时已经做过,这里给手工编辑的 fixture 兜底,
- * 保证 macOS 抓的画像部署到 Linux 容器也不会暴露抓包机平台。先换 `{jsOs}`,否则
- * `os/linux#…` 会被后面的规则截成 `os/{os}#…`。
+ * 规则与 `scripts/capture-kiro-cli.sh` 的 `templateKasUa` / `templateShellUa` 逐条一致(两处同改):
+ * 脚本写 fixture 时已经做过,这里给手工编辑的 fixture 兜底,保证 macOS 抓的画像部署到 Linux 容器
+ * 也不会暴露抓包机平台。先换 `{jsOs}`,否则 `os/linux#…` 会被后面的规则截断。
  */
-function normalizeUa(ua: string): string {
+function normalizeKasUa(ua: string): string {
   return ua
     .replace(/\bos\/(darwin|linux|win32)#[^\s]+/g, 'os/{jsOs}')
-    .replace(/\bos\/(darwin|win32)\b/g, 'os/{platform}')
-    .replace(/\bos\/(macos|linux|windows)\b/g, 'os/{os}');
+    .replace(/\bos\/(darwin|linux|win32)\b/g, 'os/{platform}')
+    .replace(/\bos\/(macos|windows)\b/g, 'os/{os}');
+}
+
+function normalizeShellUa(ua: string): string {
+  return ua.replace(/\bos\/(macos|linux|windows)\b/g, 'os/{os}');
 }
 
 function normalizeProfileOs(profile: KiroClientProfile): KiroClientProfile {
@@ -174,13 +180,13 @@ function normalizeProfileOs(profile: KiroClientProfile): KiroClientProfile {
     ...profile,
     kas: {
       ...profile.kas,
-      userAgent: normalizeUa(profile.kas.userAgent),
-      xAmzUserAgent: normalizeUa(profile.kas.xAmzUserAgent),
+      userAgent: normalizeKasUa(profile.kas.userAgent),
+      xAmzUserAgent: normalizeKasUa(profile.kas.xAmzUserAgent),
     },
     shell: {
       ...profile.shell,
-      userAgent: normalizeUa(profile.shell.userAgent),
-      xAmzUserAgent: normalizeUa(profile.shell.xAmzUserAgent),
+      userAgent: normalizeShellUa(profile.shell.userAgent),
+      xAmzUserAgent: normalizeShellUa(profile.shell.xAmzUserAgent),
     },
   };
 }
