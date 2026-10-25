@@ -1,3 +1,10 @@
+# [1.13.0](https://github.com/yupanzi/kiro2claude/compare/v1.12.0...v1.13.0) (2026-10-25)
+
+
+### Features
+
+* **core:** 移除 Claude 4.5 全系,老名字兜底到家族最新版本 ([8893d16](https://github.com/yupanzi/kiro2claude/commit/8893d16bd1c75b2b483079828c24876b739fe9c1))
+
 # [1.12.0](https://github.com/yupanzi/kiro2claude/compare/v1.11.0...v1.12.0) (2026-10-25)
 
 
