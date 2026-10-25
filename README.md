@@ -1,8 +1,6 @@
 # kiro2claude
 
-> 用你自己的 kiro-cli 套餐,给任何 Claude / OpenAI 客户端供能。
-
-**双协议兼容网关**:把 kiro-cli(Kiro 后端)包装成 Anthropic Messages API + OpenAI Chat Completions / Responses API。改个 base URL,Claude Code、Cursor、OpenAI SDK、Codex CLI 直接接入,账单走你的 kiro-cli,后端对客户端透明。
+把 kiro-cli(Kiro 后端)包装成 **Anthropic Messages + OpenAI Chat Completions / Responses** 双协议网关:改个 base URL,Claude Code、Codex CLI 与各家 SDK 即可接入,账单走你的 kiro-cli。支持流式、工具调用、Vision、原生 reasoning、hosted WebSearch 与 `count_tokens`。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 ![Node](https://img.shields.io/badge/node->=22-brightgreen.svg)
@@ -10,88 +8,52 @@
 
 > **免责声明**:非官方项目,与 AWS、Amazon、Anthropic、OpenAI、Kiro 均无关联、未获授权;上述名称为各自所有者的商标,此处仅用于说明 API 协议兼容。仅供学习研究、非商业用途;接入第三方代理**可能违反上游服务条款并导致账号封停**。软件按 [MIT](./LICENSE)「原样(AS IS)」提供、不含任何担保,**风险与法律责任自负**。
 
-## 亮点
+## 支持的模型
 
-- **双协议、三端点**——`/claude/v1`(Messages)+ `/openai/v1`(Chat Completions & Responses)。一套凭据同时喂 Anthropic 和 OpenAI 生态,不用起两个服务。
-- **模型全,reasoning 原生**——Claude 全系 + GPT-5.6(Sol / Terra / Luna)。Extended Thinking(adaptive)与 `reasoning_effort` 直接映射 Kiro 原生 reasoning,不靠 prompt 硬凑。
-- **真客户端跑通,不只是"兼容 SDK"**——Claude Code、Codex CLI 的对话 + 工具调用端到端实测过(harness 在 [`tools/`](./tools/))。
-- **替你抠上游的坑**——工具调用文本救援、空流自动重试、`/api/*` 去插件字段镜像:把 Kiro 的偶发毛病在网关层吸收掉,客户端无感。
-- **插件化,全 MIT**——计量、credit 反演都是插件,经 [`@kiro2claude/plugin-api`](./packages/plugin-api/) 契约接入;写自己的插件不用碰 core。
-- **零配置文件**——纯环境变量,复用 kiro-cli 的 SQLite 凭据,token 到期自动刷新。
+| 模型 ID | 上下文 | reasoning |
+|---|---|---|
+| `claude-opus-5-5` | 1M | 原生,常开 |
+| `claude-opus-5` · `claude-opus-4-8` · `claude-opus-4-7` | 1M | 原生 |
+| `claude-opus-4-6` | 1M | 无 |
+| `claude-opus-4-5-20251101` | 200K | 无 |
+| `claude-sonnet-5-5` | 1M | 原生,常开 |
+| `claude-sonnet-5` · `claude-sonnet-4-6` | 1M | 原生 |
+| `claude-sonnet-4-5-20250929` | 200K | 无 |
+| `claude-haiku-5-5` | 1M | 原生 |
+| `claude-haiku-4-5-20251001` | 200K | 无 |
+| `gpt-5.6-sol` · `gpt-5.6-terra` · `gpt-5.6-luna` | 922K | 原生,不透明 |
 
-此外支持 Vision、流式 SSE 和 `count_tokens`。Messages 接口还支持 hosted WebSearch(`web_search_20250305` → Kiro MCP),流式与非流式均保留结构化搜索结果及来源 URL。
-
-## 架构
-
-```mermaid
-flowchart LR
-    client["Claude / OpenAI 客户端"]
-    gw["kiro2claude · Fastify"]
-    kiro["runtime.{region}.kiro.dev"]
-    oidc["AWS SSO OIDC"]
-    db[("kiro-cli data.sqlite3")]
-
-    client -->|"Messages / Chat / Responses"| gw
-    gw -->|"请求 · Smithy awsJson1.0"| kiro
-    kiro -->|"响应 · AWS Event Stream"| gw
-    gw <-->|"读取 / 到期刷新 token"| db
-    gw -->|"CreateToken 刷新"| oidc
-```
-
-- **认证**——kiro-cli device code flow(Builder ID / IAM Identity Center),见 [kiro.dev 文档](https://kiro.dev/docs/cli/authentication/)
-- **上游**——`POST runtime.<region>.kiro.dev/`,请求 Smithy awsJson1.0、按 `x-amz-target` 区分操作:对话走 `GenerateAssistantResponse`(响应 AWS Event Stream),WebSearch 走 `InvokeMCP`
-- **存储**——复用 kiro-cli 的 SQLite 凭据,token 到期就地刷新
+- 两个协议端点共用同一份目录,真相源 [`models-catalog.ts`](./packages/core/src/claude/models-catalog.ts);每个 Claude 模型另有 `-thinking` 变体
+- 「常开」= 上游不接受关闭 thinking,`disabled` 按 adaptive + `low` effort 发送
+- 计价差异:Opus 5.5 / Sonnet 5.5 冷请求有溢价,Haiku 5.5 与 GPT 的长 prompt 整单加价,系数见 [`plugin-derived`](./packages/plugin-derived/)
+- GPT 窗口未放开的账号设 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW=272000`;Fable 系列 Kiro 尚未提供
 
 ## 快速开始
 
 ```bash
-# 1. 装好 kiro-cli 并登录(凭据写入本地 SQLite)
+# 1. kiro-cli 登录(凭据写入本地 SQLite)
 kiro-cli login --use-device-flow --identity-provider https://your-idc.awsapps.com/start --region us-east-1
 # 或 Builder ID:kiro-cli login --use-device-flow --license free
 
-# 2. 装依赖、起服务
+# 2. 起服务(Linux 凭据路径 ~/.local/share/kiro-cli/data.sqlite3)
 pnpm install
 KIRO2CLAUDE_API_KEY=sk-local-test \
 KIRO2CLAUDE_SQLITE_DB_PATH="$HOME/Library/Application Support/kiro-cli/data.sqlite3" \
 pnpm dev
 ```
 
-> Linux 的 SQLite 路径是 `~/.local/share/kiro-cli/data.sqlite3`(macOS 路径含空格,必须带引号)。
-
-服务默认监听 `127.0.0.1:8080`。Claude 客户端(Anthropic SDK / Claude Code)base URL 指向 `http://127.0.0.1:8080/claude`(SDK 自动补 `/v1/messages`)、key 设为 `sk-local-test`:
+默认监听 `127.0.0.1:8080`。Claude 客户端 base URL 用 `http://127.0.0.1:8080/claude`,OpenAI 客户端用 `http://127.0.0.1:8080/openai/v1`。全部环境变量见 [`.env.example`](./.env.example)。
 
 ```bash
 curl -s http://127.0.0.1:8080/claude/v1/messages \
   -H 'x-api-key: sk-local-test' -H 'content-type: application/json' \
-  -d '{"model":"claude-opus-4-8","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}' \
-  | jq '.content[0].text'
+  -d '{"model":"claude-opus-5","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}'
 ```
-
-## HTTP 路由
-
-core 的接口用 `KIRO2CLAUDE_API_KEY` 鉴权(`/`、`/health` 除外);插件路由由插件自己用 `ctx.apiKey` 鉴权。
-
-| 路径 | 方法 | 说明 |
-|---|---|---|
-| `/health` | GET | liveness 探针(免鉴权) |
-| `/claude/v1/models` | GET | Claude 模型列表 |
-| `/claude/v1/messages` | POST | Claude 消息接口(流式 / Vision / 工具调用 / thinking) |
-| `/claude/v1/messages/count_tokens` | POST | Token 计数 |
-| `/openai/v1/models` | GET | OpenAI 模型列表 |
-| `/openai/v1/chat/completions` | POST | OpenAI Chat Completions(流式 / tool_calls / reasoning) |
-| `/openai/v1/responses` | POST | OpenAI Responses API——**Codex CLI 走这条** |
-| `/api/{claude,openai}/v1/*` | 同上 | 去泄漏镜像:`usage` 剥掉插件扩展字段,只留标准响应 |
-| `/kiro/usage` | GET | 透传 Kiro `getUsageLimits`(剔除 `userInfo`) |
-
-想要计量字段用 `/claude/v1`;想要纯标准响应用 `/api/claude/v1`(计量后台照跑)。OpenAI 客户端 base URL 指到 `.../openai/v1`、`Authorization: Bearer <key>`。模型 ID 见 [`models-catalog.ts`](./packages/core/src/claude/models-catalog.ts),Claude 每个模型都有 `-thinking` 变体。
 
 ## Docker
 
-单一镜像 [`ghcr.io/yupanzi/kiro2claude`](https://github.com/yupanzi/kiro2claude/pkgs/container/kiro2claude)(公开、免鉴权 pull),内置 core + 两个默认启用的插件。
-
 ```bash
-docker pull ghcr.io/yupanzi/kiro2claude:latest
-cp .env.example .env   # 填 KIRO2CLAUDE_API_KEY;删掉 KIRO2CLAUDE_SQLITE_DB_PATH 行(镜像已内置,--env-file 不剥引号)
+cp .env.example .env   # 填 KIRO2CLAUDE_API_KEY;删掉 KIRO2CLAUDE_SQLITE_DB_PATH 行(镜像已内置)
 
 docker run -d --name kiro2claude --env-file .env \
   -e KIRO2CLAUDE_HOST=0.0.0.0 \
@@ -101,61 +63,57 @@ docker run -d --name kiro2claude --env-file .env \
   -v kiro-home:/home/kiro/.local/share/kiro-cli \
   ghcr.io/yupanzi/kiro2claude:latest
 
-docker logs -f kiro2claude   # 跟随日志,浏览器打开 device flow URL 完成认证
+docker logs -f kiro2claude   # 首次启动打出 device flow URL,浏览器完成认证
 ```
 
-设了 `KIRO2CLAUDE_LOGIN_START_URL` 即容器免交互登录:首次启动在日志打出 device flow URL。本地构建用 `./scripts/docker-build.sh -t kiro2claude`。
+## HTTP 路由
+
+除 `/`、`/health` 外都用 `KIRO2CLAUDE_API_KEY` 鉴权。
+
+| 路径 | 说明 |
+|---|---|
+| `GET /health` | liveness 探针 |
+| `GET /claude/v1/models` · `GET /openai/v1/models` | 模型列表 |
+| `POST /claude/v1/messages` | Anthropic Messages |
+| `POST /claude/v1/messages/count_tokens` | Token 计数 |
+| `POST /openai/v1/chat/completions` | OpenAI Chat Completions |
+| `POST /openai/v1/responses` | OpenAI Responses(Codex CLI) |
+| `/api/{claude,openai}/v1/*` | 同上,`usage` 不含插件扩展字段 |
+| `GET /kiro/usage` | Kiro 额度查询 |
 
 ## 插件
 
-实现 [`@kiro2claude/plugin-api`](./packages/plugin-api/) 契约即可扩展网关(加路由、往 `usage` 注入 wire 字段),不用改 core——loader 发现 core 所在 `node_modules` 第一层里带 `kiro2claude-plugin` keyword 的包,按 `dependsOn` 拓扑加载(第三方插件要装成 core 的依赖)。指南见 [`docs/PLUGIN-DEVELOPMENT.md`](./docs/PLUGIN-DEVELOPMENT.md),示范见 [`echo-plugin`](./packages/examples/echo-plugin/)。
+镜像内置两个插件,均默认启用;写自己的插件见 [`docs/PLUGIN-DEVELOPMENT.md`](./docs/PLUGIN-DEVELOPMENT.md)。
 
-镜像内置两个插件(默认开):
-
-- [`plugin-metering`](./packages/plugin-metering/)——计量本次 credit 消耗,注入 `usage.kiro_metering`(`KIRO2CLAUDE_METERING_DISABLE=true` 可关)
-- [`plugin-derived`](./packages/plugin-derived/)——把 Kiro credit 反演成 Anthropic 风格 token/cache 字段:默认直接覆写标准 `input_tokens` / `cache_*`(OpenAI 侧为 `cached_tokens`),`KIRO2CLAUDE_DERIVED_INCLUDE_FIELD=true` 时改为注入 `usage.kiro_derived`(含 USD 成本拆分)
-
-## 开发
-
-```bash
-pnpm test        # vitest 全套
-pnpm typecheck   # tsc --noEmit
-pnpm check       # biome format + lint(不写盘)
-pnpm run ci      # biome ci + typecheck + test
-```
-
-pnpm workspace,Node ≥ 22 / TypeScript / ES Modules。husky pre-commit 强制 `biome check + typecheck + vitest + markdownlint`,`pnpm install` 后自动生效;提交遵循 [Conventional Commits](https://www.conventionalcommits.org/),细节见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+| 插件 | 作用 |
+|---|---|
+| [`plugin-metering`](./packages/plugin-metering/) | 注入本次 credit 消耗 `usage.kiro_metering` |
+| [`plugin-derived`](./packages/plugin-derived/) | 把 credit 反演成 Anthropic 风格 token / cache 字段 |
 
 ## 已知限制
 
-网关只能修上游 wire 与协议翻译层的问题;下面这些在链路里仍然存在,单测全绿不等于会话无损:
+网关只修 wire 与协议翻译层,以下行为仍然存在(「」内为 [`docs/PITFALLS.md`](./docs/PITFALLS.md) 条目):
 
-- **system prompt 只能以 user 级权重进模型,身份覆写因此不可靠**:Kiro wire 没有 system 字段,`additionalContext` 这类结构化字段上游收下即丢(2026-09-10 实测:塞进去的内容模型一概不知、input token 不变)。网关把 system 文本折进首条 user 消息正文,不造任何 assistant 轮次;但它压不过上游自己的系统提示,直接问「你是谁」时模型多半自报 Kiro / AWS。`KIRO2CLAUDE_IDENTITY_OVERRIDE` 追加的身份指令实测 opus-5 只有约三成、opus-4-6 0/2 生效,换措辞与位置都改不了,故**默认关**。长上下文 + 真实工具调用的 A/B(24 会话、352 次调用)显示,折进正文与另起合成轮次相比,工具调用与任务完成率没有可测差异。
-- **continuation 文案偶发进正文**:请求以 assistant 结尾时(prefill 或上轮中断的续接),Kiro 只接受 user 作为当前消息,网关把该 assistant 内容留在历史并追加一句续写指令。实测 7 次里 2 次模型把指令句尾复述进可见输出;这也不是字节级 prefill。
-- **客户端省略的历史无法还原**:上轮的 thinking、被自动压缩掉的内容不再随请求发来时,网关没有跨请求存储,不擅自复活。Claude Code 自动压缩(实测约第 50 个请求触发)保留主线任务与未完成项,但会丢部分 API 签名、返回结构、错误码拼写等细节。
-- **GPT 推理不可读,Chat Completions 上不回传**:上游只给占位文本和密文签名,网关不把它当明文展示。Messages 下发为 `redacted_thinking`、Responses 在声明 `include:["reasoning.encrypted_content"]` 时(Codex 默认如此)放进 `encrypted_content`,下一轮都原样回传上游;Chat Completions 没有对应通道,GPT 推理不回传。
-- **Claude Opus 5.5 / Sonnet 5.5 的 thinking 关不掉,冷请求更贵**:上游 schema 没有 disabled(显式 disabled 回 400),网关把 `thinking:{type:"disabled"}` / `{type:"between_tools"}` / `reasoning_effort:"none"` 按 adaptive 发,effort 取客户端值、没给时取 `low`,想少思考就降 effort。两者的**缓存未命中输入**都另按约 1.94 倍计价:Opus 5.5 标 2.0x,冷启动 / 缓存失效的请求比 opus-5 贵约 77%,命中与输出比 opus-5 便宜约 9%(2026-09-27 实测);Sonnet 5.5 标 1.3x,冷请求约是 sonnet-5 的 1.94 倍,命中与输出与 sonnet-5 同价(2026-10-07 实测)。`kiro_derived` 已按实测费率反演。Fable 系列上游尚不成熟,暂不支持。
-- **Claude Haiku 5.5 超过 100K 整单 5 倍**:Kiro 标 0.06x / 0.3x,prompt(含缓存命中)超过 100K token 时整个请求按 5 倍计,命中部分也一样;实测 Kiro 对它按 Anthropic 标价同比计价(命中 0.1×、输出是输入的 5 倍,2026-10-24),`kiro_derived` 已按实测反演。Kiro 把它标为实验性模型,只在部分区域与付费计划可用,不可用时上游直接拒绝。thinking 可关,默认 effort 为 medium。
-- **旧模型不做 thinking 控制**:opus-4.6 及以下、sonnet-4.5、haiku-4.5 没有原生 reasoning,网关不注入提示词也不发字段,`thinking` / `-thinking` 后缀对它们无效,走上游默认。
-- **无签名的历史 thinking 不回传**:thinking 块要带上游给的 `signature` 才走原生 `reasoningContent`;无签名的(旧模型文本解码、不带 `encrypted_content` 的 reasoning summary)丢弃,不拼成文本;签名失效时网关剥掉全部历史推理重发一次。
-- **多张图片只能靠位置归属**:Kiro wire 只有消息级 `images[]`,tool_result 里放图上游静默丢弃、正文是纯字符串,所以「这张图属于哪个工具调用」在 wire 上表达不了。网关做了三件事:tool_result 按 tool_use 顺序规范化、tool_result 内占位符带序号、消息里 ≥2 张 tool_result 图时在正文前置一行 `[Attached images, in order: image k = …]` 图例。2026-09-09 真实上游实测:6 个并行 Read 各回一张图,无图例时两个模型 4/4 错位,有图例 4/4 全对;Docker 里真实 Claude Code / Codex 读 4–6 张不同数字图能正确对应文件。仍不可控的是模型自己的判断:GPT-5.6 对两张字节相同的图稳定答「1 张」(token 计数证明两张都送到了),以及对低分辨率点阵数字偶发误读一位。真实复跑:`packages/core/test/manual/multi-image-attribution-probe.mjs`(API)与 `multi-image-cli-probe.mjs`(Docker 真 CLI,计费)。
-- **超长工具描述会被截断**:单个工具的 description 超过 `KIRO2CLAUDE_TOOL_DESCRIPTION_MAX_LEN`(默认 32768 字符)时截掉尾部并打 warn,防止单个畸形描述吃掉上下文窗口;已知最大的合法工具(Workflow)远低于此,需要时调大。工具名超过 63 字符(上游硬限制)会改写成「前缀 + 哈希」发给模型,回给客户端时还原。
-- **tool_result 的 `is_error` 不会到达模型**:网关同 kiro-cli 发 `status:"error"`,但上游不把它当失败信号交给模型(对照实验:正文保持中性、只改 status / isError,luna 与 opus-5 全部答成功),成败只能从正文判断。Claude Code 的报错结果正文自带 `<tool_use_error>` / `Exit code` 等信息,不受影响;只靠 `is_error` 标记、正文中性的客户端会被当成成功。
-- **错误前已输出的文字留在客户端历史**:上游中途报错时,之前已流出的正文客户端已经收到并保存;保留原文不等于它经过验证。
-- **Claude Code 2.1.263 的 Unicode 转义改写(客户端侧)**:工具参数里字面的 `\u0000` / `\u000a` JSON 转义序列会被 CLI 还原成真实 NUL / LF,导致 Bash 参数校验失败、Write 写坏源码。绕过网关直连 Anthropic 同样复现,整块 / 7 字符 / 逐字符 / `\u005c` 等价编码四种分片方式无一幸免。网关不做双重转义、不改写工具命令。零上游复现:`packages/core/test/manual/claude-unicode-input-probe.mjs`。
-
-已修复且有守卫的那些(帧边界 EOF 当成功、截断 tool_use 到达客户端、坏帧后拼接正文、孤儿 tool_result、空流当正常完成等)见 [CLAUDE.md](./CLAUDE.md) 踩坑「流式传输」组;真实 CLI 复跑入口在 `packages/core/test/manual/`。
+- system 只有 user 级权重,身份覆写不可靠(`KIRO2CLAUDE_IDENTITY_OVERRIDE` 默认关)「注入文本」
+- 以 assistant 结尾的请求不是真 prefill
+- 客户端压缩或省略的历史无法还原,历史 thinking 只回传带签名的「原生 reasoning / effort / system 的 wire 真相」
+- GPT 推理不可读,Chat Completions 不回传推理「推理往返」
+- 多张图片只能按位置归属到工具调用「多图归属只靠顺序」
+- tool_result 的 `is_error` 不会到达模型,成败只能从正文判断「工具调用往返与图片的 wire 形态」
+- 超长工具 description 截尾,超过 63 字符的工具名改写后再还原「tool description cap」
+- 上游中途报错时,之前已下发的正文留在客户端
+- Claude Code 的 Write 会把字面 `\uXXXX` 转义还原成字符(客户端侧,复现 `claude-unicode-input-probe.mjs`)
 
 ## 文档
 
 | 主题 | 入口 |
 |---|---|
-| 架构分层 / 代码风格 / 踩坑地图 | [CLAUDE.md](./CLAUDE.md) |
-| 踩坑的来龙去脉与实测证据 | [`docs/PITFALLS.md`](./docs/PITFALLS.md) |
-| 手工探针与检测器(含打真实上游的)| [`packages/core/test/manual/README.md`](./packages/core/test/manual/README.md) |
-| 插件开发指南 | [`docs/PLUGIN-DEVELOPMENT.md`](./docs/PLUGIN-DEVELOPMENT.md) |
-| 插件契约类型 | [`packages/plugin-api/`](./packages/plugin-api/) |
-| 贡献 / 提交规范 | [CONTRIBUTING.md](./CONTRIBUTING.md) |
+| 架构 / 规范 / 踩坑地图 | [AGENTS.md](./AGENTS.md) |
+| 踩坑来龙去脉 | [`docs/PITFALLS.md`](./docs/PITFALLS.md) |
+| 插件开发 | [`docs/PLUGIN-DEVELOPMENT.md`](./docs/PLUGIN-DEVELOPMENT.md) |
+| 手工探针 | [`packages/core/test/manual/README.md`](./packages/core/test/manual/README.md) |
+| 真实 CLI harness | [`tools/claude-code/`](./tools/claude-code/) · [`tools/codex/`](./tools/codex/) |
+| 贡献 / 提交 / 发版 | [CONTRIBUTING.md](./CONTRIBUTING.md) |
 | 安全披露 | [SECURITY.md](./SECURITY.md) |
 
 ## 许可证
