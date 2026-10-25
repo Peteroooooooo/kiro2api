@@ -2,6 +2,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { CLAUDE_MODEL } from './_harness.mjs';
 
 const base = process.env.K2C_PROBE_BASE ?? 'http://127.0.0.1:18931';
 const dockerBase = process.env.K2C_PROBE_DOCKER_BASE ?? 'http://host.docker.internal:18931';
@@ -25,7 +26,7 @@ async function run(scenario) {
     '-e', 'ANTHROPIC_API_KEY=empty-probe-key',
     '-e', 'DISABLE_NONESSENTIAL_TRAFFIC=1',
     ...(persistent ? ['-e', 'CLAUDE_CODE_MAX_RETRIES=1'] : []),
-    image, '-p', 'Reply with EMPTY_PROBE_RECOVERED.', '--model', 'claude-opus-5',
+    image, '-p', 'Reply with EMPTY_PROBE_RECOVERED.', '--model', CLAUDE_MODEL,
     '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--max-turns', '8', '--no-session-persistence', '--tools', 'Read',
   ];

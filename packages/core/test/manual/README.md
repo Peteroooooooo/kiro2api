@@ -1,6 +1,6 @@
 # 手工探针与检测器
 
-非 CI、vitest 不收(唯一例外 `live-conversation-provider.test.ts`)。「计费」列为「是」的打真实上游。默认测试模型 `claude-opus-5`(`_harness.mjs` 的 `CLAUDE_MODEL`)。起本地服务器的脚本跑完要 `pkill` 掉 tsx 子进程:kill pnpm 包装进程杀不掉它,旧代码会继续占端口。
+非 CI、vitest 不收(唯一例外 `live-conversation-provider.test.ts`)。「计费」列为「是」的打真实上游。默认测试模型 `claude-opus-5-5`(`_harness.mjs` 的 `CLAUDE_MODEL`)。起本地服务器的脚本跑完要 `pkill` 掉 tsx 子进程:kill pnpm 包装进程杀不掉它,旧代码会继续占端口。
 
 | 脚本 | 计费 | 用途 |
 |---|---|---|

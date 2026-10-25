@@ -34,6 +34,7 @@ import { registerClaudeRoutes } from '../../src/routes/claude.js';
 import { buildAssistantResponseFrame, framesWithMetering } from '../helpers/event-stream.js';
 
 const API_KEY = 'sk-test-handlers-stream';
+const MODEL = 'claude-opus-5-5';
 
 /** Async generator that yields no chunks — closes the stream immediately. */
 async function* emptyStream(): AsyncIterable<Buffer> {
@@ -110,7 +111,7 @@ async function buildApp(
 }
 
 const STREAM_BODY = {
-  model: 'claude-sonnet-4-5-20250929',
+  model: MODEL,
   max_tokens: 1024,
   stream: true,
   messages: [{ role: 'user', content: 'hello' }],
@@ -226,7 +227,7 @@ describe('handlers stream: SSE happy path', () => {
       headers: { 'x-api-key': API_KEY },
       payload: STREAM_BODY,
     });
-    expect(response.body).toContain('claude-sonnet-4-5-20250929');
+    expect(response.body).toContain(MODEL);
   });
 });
 
@@ -329,8 +330,6 @@ describe('handlers stream: client disconnect drains upstream for billing', () =>
     });
     return { reach, reached, release, wait };
   }
-
-  const MODEL = 'claude-sonnet-4-5-20250929';
 
   it('client disconnects before metering frame: drains to it, runs hook once with credit, stops writing', async () => {
     const metering = { unit: 'credit', unitPlural: 'credits', usage: 0.0048 };
@@ -490,8 +489,6 @@ describe('handlers stream: client disconnect drains upstream for billing', () =>
 });
 
 describe('handlers stream: deferred commit', () => {
-  const MODEL = 'claude-sonnet-4-5-20250929';
-
   it('keepalive timeout commits before content; a then-empty upstream falls back to in-band error', async () => {
     // No content arrives within STREAM_COMMIT_TIMEOUT_MS, so the keepalive net
     // forces a commit (message_start on the wire). The stream then ends empty —

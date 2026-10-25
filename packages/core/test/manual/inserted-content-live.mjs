@@ -25,15 +25,16 @@
  *
  * Usage:
  *   K2C_API_KEY=... node packages/core/test/manual/inserted-content-live.mjs
- *   K2C_LIVE_BASE (default http://127.0.0.1:8080/claude)  K2C_LIVE_MODEL (default claude-opus-5)
+ *   K2C_LIVE_BASE (default http://127.0.0.1:8080/claude)  K2C_LIVE_MODEL (default `_harness.mjs` CLAUDE_MODEL)
  *   K2C_LIVE_SCENARIOS=a,b  K2C_LIVE_REPEAT=1
  * Exit code 1 if any scenario fails after all repeats.
  */
 import { writeFileSync } from 'node:fs';
+import { CLAUDE_MODEL } from './_harness.mjs';
 
 const base = process.env.K2C_LIVE_BASE ?? 'http://127.0.0.1:8080/claude';
 const apiKey = process.env.K2C_API_KEY;
-const model = process.env.K2C_LIVE_MODEL ?? 'claude-opus-5';
+const model = process.env.K2C_LIVE_MODEL ?? CLAUDE_MODEL;
 const repeat = Number(process.env.K2C_LIVE_REPEAT ?? 1);
 const reportPath = process.env.K2C_LIVE_REPORT ?? '/tmp/k2c-inserted-content-live.json';
 if (!apiKey) {

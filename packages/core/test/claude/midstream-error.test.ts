@@ -34,7 +34,7 @@ import {
 } from '../helpers/event-stream.js';
 
 const API_KEY = 'sk-test-midstream-error';
-const MODEL = 'claude-sonnet-4-5-20250929';
+const MODEL = 'claude-opus-5-5';
 
 // A retryable (transient) and a fatal code, per RETRYABLE_UPSTREAM_ERROR_CODES.
 const RETRYABLE_CODE = 'ThrottlingException';

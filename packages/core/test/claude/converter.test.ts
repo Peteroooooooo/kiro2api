@@ -24,7 +24,7 @@ const TOOL_NAME_MAX_LEN = 63;
 
 function baseRequest(overrides: Partial<MessagesRequest> = {}): MessagesRequest {
   return {
-    model: 'claude-sonnet-4',
+    model: 'claude-opus-4-6',
     max_tokens: 1024,
     messages: [],
     stream: false,
@@ -50,16 +50,18 @@ describe('mapModel', () => {
     expect(mapModel('gpt-4')).toBeUndefined();
   });
 
-  it('test_map_model_thinking_suffix_sonnet', () => {
-    expect(mapModel('claude-sonnet-4-5-20250929-thinking')).toBe('claude-sonnet-4.5');
-  });
-
-  it('test_map_model_thinking_suffix_opus_4_5', () => {
-    expect(mapModel('claude-opus-4-5-20251101-thinking')).toBe('claude-opus-4.5');
-  });
-
-  it('test_map_model_thinking_suffix_opus_4_6', () => {
+  it('test_map_model_opus_4_6', () => {
+    // 版本号取紧挨家族名的那段:opus-4-6 是 4.6,不是 6
+    expect(mapModel('claude-opus-4-6')).toBe('claude-opus-4.6');
+    expect(mapModel('claude-opus-4.6')).toBe('claude-opus-4.6');
     expect(mapModel('claude-opus-4-6-thinking')).toBe('claude-opus-4.6');
+    expect(mapModel('claude-opus-4-6-20260205-thinking')).toBe('claude-opus-4.6');
+  });
+
+  it('test_map_model_sonnet_4_6', () => {
+    expect(mapModel('claude-sonnet-4-6')).toBe('claude-sonnet-4.6');
+    expect(mapModel('claude-sonnet-4-6-thinking')).toBe('claude-sonnet-4.6');
+    expect(mapModel('claude-sonnet-4-6-20260217-thinking')).toBe('claude-sonnet-4.6');
   });
 
   it('test_map_model_opus_4_7', () => {
@@ -91,13 +93,6 @@ describe('mapModel', () => {
     expect(mapModel('claude-opus-5-20260720-thinking')).toBe('claude-opus-5');
   });
 
-  it('test_map_model_opus_5_not_confused_with_4_5', () => {
-    // 版本号取紧挨家族名的那段:opus-4-5 是 4.5,不是 5
-    expect(mapModel('claude-opus-4-5')).toBe('claude-opus-4.5');
-    expect(mapModel('claude-opus-4.5')).toBe('claude-opus-4.5');
-    expect(mapModel('claude-opus-4-5-20251101-thinking')).toBe('claude-opus-4.5');
-  });
-
   it('test_map_model_newer_than_known_undefined', () => {
     // 回归 bug:子串匹配 'opus-5' 曾把当时还没上的 opus-5-5 静默映到 claude-opus-5,
     // opus-6 掉进 4.6 兜底。上游没有的更新版本一律 400,不静默换成旧模型
@@ -108,8 +103,8 @@ describe('mapModel', () => {
     expect(mapModel('claude-opus-6')).toBeUndefined();
     expect(mapModel('claude-sonnet-5-6')).toBeUndefined();
     expect(mapModel('claude-sonnet-6')).toBeUndefined();
-    expect(mapModel('claude-haiku-5')).toBeUndefined();
     expect(mapModel('claude-haiku-5-6')).toBeUndefined();
+    expect(mapModel('claude-haiku-6')).toBeUndefined();
   });
 
   it('test_map_model_between_known_versions_undefined', () => {
@@ -119,6 +114,10 @@ describe('mapModel', () => {
     expect(mapModel('claude-opus-5-4-thinking')).toBeUndefined();
     expect(mapModel('claude-opus-4-9')).toBeUndefined();
     expect(mapModel('claude-sonnet-4-7')).toBeUndefined();
+    // haiku 表里只有 5.5:比它低但高于已下线一代的编号同样 400,不按「比最老的还老」吞成兜底
+    expect(mapModel('claude-haiku-5')).toBeUndefined();
+    expect(mapModel('claude-haiku-5-1')).toBeUndefined();
+    expect(mapModel('claude-haiku-4-6')).toBeUndefined();
   });
 
   it('test_map_model_digit_led_suffix_not_minor', () => {
@@ -129,39 +128,34 @@ describe('mapModel', () => {
     expect(mapModel('claude-opus-5-5[1m]')).toBe('claude-opus-5.5');
   });
 
-  it('test_map_model_legacy_names_keep_fallback', () => {
-    // 没有版本号或比已知版本老的写法照旧走家族兜底
-    expect(mapModel('claude-3-opus-20240229')).toBe('claude-opus-4.6');
-    expect(mapModel('claude-opus-4-1-20250805')).toBe('claude-opus-4.6');
-    expect(mapModel('gpt-opus')).toBe('claude-opus-4.6');
-    expect(mapModel('claude-3-7-sonnet-20250219')).toBe('claude-sonnet-4.5');
-    expect(mapModel('claude-3-5-haiku-20241022')).toBe('claude-haiku-4.5');
+  it('test_map_model_legacy_names_fall_back_to_newest', () => {
+    // 没有版本号或已下线(4.5 及更老)的写法走家族兜底,兜底是家族最新版本
+    expect(mapModel('claude-3-opus-20240229')).toBe('claude-opus-5.5');
+    expect(mapModel('claude-opus-4-1-20250805')).toBe('claude-opus-5.5');
+    expect(mapModel('claude-opus-4-5-20251101-thinking')).toBe('claude-opus-5.5');
+    expect(mapModel('gpt-opus')).toBe('claude-opus-5.5');
+    expect(mapModel('claude-3-7-sonnet-20250219')).toBe('claude-sonnet-5.5');
+    expect(mapModel('claude-sonnet-4-5-20250929')).toBe('claude-sonnet-5.5');
+    expect(mapModel('claude-sonnet')).toBe('claude-sonnet-5.5');
+    expect(mapModel('claude-3-5-haiku-20241022')).toBe('claude-haiku-5.5');
+    expect(mapModel('claude-haiku-4-5-20251001')).toBe('claude-haiku-5.5');
+    expect(mapModel('claude-haiku-4-5-20251001-thinking')).toBe('claude-haiku-5.5');
   });
 
   it('test_map_model_other_spellings', () => {
     // 版本在前 / 空格分隔 / provider 前缀与后缀
     expect(mapModel('claude-4.7-opus')).toBe('claude-opus-4.7');
     expect(mapModel('claude-4.6-sonnet')).toBe('claude-sonnet-4.6');
-    expect(mapModel('Claude Opus 4.5')).toBe('claude-opus-4.5');
-    expect(mapModel('us.anthropic.claude-opus-4-5-20251101-v1:0')).toBe('claude-opus-4.5');
-    expect(mapModel('claude-opus-4-5@20251101')).toBe('claude-opus-4.5');
+    expect(mapModel('Claude Opus 4.6')).toBe('claude-opus-4.6');
+    expect(mapModel('us.anthropic.claude-opus-4-6-v1:0')).toBe('claude-opus-4.6');
+    expect(mapModel('claude-opus-4-6@20260205')).toBe('claude-opus-4.6');
     expect(mapModel('anthropic/claude-opus-4.8')).toBe('claude-opus-4.8');
-  });
-
-  it('test_map_model_thinking_suffix_haiku', () => {
-    expect(mapModel('claude-haiku-4-5-20251001-thinking')).toBe('claude-haiku-4.5');
   });
 
   it('test_map_model_sonnet_5', () => {
     expect(mapModel('claude-sonnet-5')).toBe('claude-sonnet-5');
     expect(mapModel('claude-sonnet-5-thinking')).toBe('claude-sonnet-5');
     expect(mapModel('anthropic.claude-sonnet-5')).toBe('claude-sonnet-5');
-  });
-
-  it('test_map_model_sonnet_5_not_confused_with_4_5', () => {
-    // 边界: 'claude-sonnet-4-5' 含 '5',但紧挨家族名的版本是 4.5
-    expect(mapModel('claude-sonnet-4-5-20250929')).toBe('claude-sonnet-4.5');
-    expect(mapModel('claude-sonnet-4-5-20250929-thinking')).toBe('claude-sonnet-4.5');
   });
 
   it('test_map_model_opus_5_5', () => {
@@ -192,9 +186,6 @@ describe('mapModel', () => {
     expect(mapModel('claude-haiku-5.5')).toBe('claude-haiku-5.5');
     expect(mapModel('claude-haiku-5-5-thinking')).toBe('claude-haiku-5.5');
     expect(mapModel('anthropic.claude-haiku-5-5')).toBe('claude-haiku-5.5');
-    // 不与 haiku-4.5 串,老写法照旧兜底到 4.5
-    expect(mapModel('claude-haiku-4-5-20251001')).toBe('claude-haiku-4.5');
-    expect(mapModel('claude-3-5-haiku-20241022')).toBe('claude-haiku-4.5');
   });
 
   it('test_map_model_fable_unsupported', () => {
@@ -253,11 +244,6 @@ describe('getContextWindowSize / usesNativeReasoning — opus-5', () => {
   it('opus-5 走原生 reasoning(比照 4.7/4.8)', () => {
     expect(usesNativeReasoning('claude-opus-5')).toBe(true);
   });
-
-  it('opus 4.5 边界: 非 1M、非原生(不被 opus-5 改动误伤)', () => {
-    expect(getContextWindowSize('claude-opus-4-5')).toBe(200_000);
-    expect(usesNativeReasoning('claude-opus-4.5')).toBe(false);
-  });
 });
 
 describe('getContextWindowSize — opus-5.5 / sonnet-5.5 / haiku-5.5', () => {
@@ -269,8 +255,6 @@ describe('getContextWindowSize — opus-5.5 / sonnet-5.5 / haiku-5.5', () => {
     expect(getContextWindowSize('claude-sonnet-5-5-thinking')).toBe(1_000_000);
     expect(getContextWindowSize('claude-haiku-5-5')).toBe(1_000_000);
     expect(getContextWindowSize('claude-haiku-5-5-thinking')).toBe(1_000_000);
-    // haiku-4.5 仍是 200K
-    expect(getContextWindowSize('claude-haiku-4-5-20251001')).toBe(200_000);
   });
 });
 
@@ -1395,7 +1379,7 @@ describe('convertRequest - identity override', () => {
 });
 
 describe('convertRequest - non-native models get no thinking control at all', () => {
-  // baseRequest 的 claude-sonnet-4 非原生 reasoning:thinking / effort 对它无效(不发字段、
+  // baseRequest 的 claude-opus-4-6 非原生 reasoning:thinking / effort 对它无效(不发字段、
   // 不注入提示词前缀),请求原样上送、走上游默认。
   const thinking = { type: 'adaptive' as const };
 

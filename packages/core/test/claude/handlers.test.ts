@@ -37,6 +37,7 @@ import {
 import { generateMinimalPdfBytes } from '../helpers/fixtures.js';
 
 const API_KEY = 'sk-test-handlers';
+const MODEL = 'claude-opus-5-5';
 
 /**
  * Build a minimal AxiosResponse matching the shape handlers.ts consumes.
@@ -103,7 +104,7 @@ async function buildApp(
 }
 
 const VALID_BODY = {
-  model: 'claude-sonnet-4-5-20250929',
+  model: MODEL,
   max_tokens: 1024,
   messages: [{ role: 'user', content: 'hello' }],
 };
@@ -188,7 +189,7 @@ describe('handlers: POST /claude/v1/messages - validation', () => {
       method: 'POST',
       url: '/claude/v1/messages',
       headers: { 'x-api-key': API_KEY },
-      payload: { model: 'claude-sonnet-4-5-20250929', messages: [{ role: 'user', content: 'hi' }] },
+      payload: { model: MODEL, messages: [{ role: 'user', content: 'hi' }] },
     });
     expect(response.statusCode).toBe(400);
   });
@@ -199,7 +200,7 @@ describe('handlers: POST /claude/v1/messages - validation', () => {
       method: 'POST',
       url: '/claude/v1/messages',
       headers: { 'x-api-key': API_KEY },
-      payload: { model: 'claude-sonnet-4-5-20250929', max_tokens: 1024 },
+      payload: { model: MODEL, max_tokens: 1024 },
     });
     expect(response.statusCode).toBe(400);
   });
@@ -228,7 +229,7 @@ describe('handlers: POST /claude/v1/messages - validation', () => {
       url: '/claude/v1/messages',
       headers: { 'x-api-key': API_KEY },
       payload: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: MODEL,
         max_tokens: 1024,
         messages: [
           { role: 'user', content: 'hi' },
@@ -251,7 +252,7 @@ describe('handlers: POST /claude/v1/messages - validation', () => {
       url: '/claude/v1/messages',
       headers: { 'x-api-key': API_KEY },
       payload: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: MODEL,
         max_tokens: 1024,
         messages: [],
       },
@@ -297,7 +298,7 @@ describe('handlers: POST /claude/v1/messages - happy path', () => {
     };
     expect(body.type).toBe('message');
     expect(body.role).toBe('assistant');
-    expect(body.model).toBe('claude-sonnet-4-5-20250929');
+    expect(body.model).toBe(MODEL);
     expect(body.content).toEqual([{ type: 'text', text: 'hi from kiro' }]);
     expect(body.stop_reason).toBe('end_turn');
     expect(provider.callApi).toHaveBeenCalledTimes(1);
@@ -390,7 +391,7 @@ describe('handlers: POST /claude/v1/messages - happy path', () => {
       url: '/claude/v1/messages',
       headers: { 'x-api-key': API_KEY },
       payload: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: MODEL,
         max_tokens: 1024,
         messages: [
           {
@@ -432,7 +433,7 @@ describe('handlers: POST /claude/v1/messages - happy path', () => {
       url: '/claude/v1/messages',
       headers: { 'x-api-key': API_KEY },
       payload: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: MODEL,
         max_tokens: 1024,
         messages: [
           {
@@ -1033,7 +1034,7 @@ describe('handlers: POST /claude/v1/messages/count_tokens', () => {
       url: '/claude/v1/messages/count_tokens',
       headers: { 'x-api-key': API_KEY },
       payload: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: MODEL,
         messages: [{ role: 'user', content: 'hello' }],
       },
     });
@@ -1059,7 +1060,7 @@ describe('handlers: POST /claude/v1/messages/count_tokens', () => {
       method: 'POST',
       url: '/claude/v1/messages/count_tokens',
       payload: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: MODEL,
         messages: [{ role: 'user', content: 'hello' }],
       },
     });

@@ -192,5 +192,5 @@ openai/                 OpenAI 兼容层:语义核心复用 claude,只做协议�
 - vitest;只有 core 有 `vitest.config.ts`(排除 e2e);pre-commit 强制 `biome check + pnpm -r typecheck + pnpm -r test + markdownlint`
 - **e2e 不进 CI**(`packages/core/test/e2e/`,消耗真实 token);`test/` 不在任何 tsconfig 里、vitest 也不做类型检查,改测试要单独 tsc
 - **`test/scripts/` 测的是 shell 脚本**:假 `docker` 记录调用参数,不碰本机 `.env`、凭据、镜像
-- **默认测试模型 `claude-opus-5`**,只管真打上游的那几层;单测里的 `claude-opus-4-6` 是 fixture 常量,别全局替换
+- **默认测试模型 `claude-opus-5-5`**(上游 id `claude-opus-5.5`),只管真打上游的那几层;单测里的 `claude-opus-4-6` 是 fixture 常量,别全局替换
 - 固定测试图 `packages/core/test/fixtures/images/`:`test-small.png` 内联;`test-large.png` 超阈值走 tool_result 回传,converter 须提升到 `images`

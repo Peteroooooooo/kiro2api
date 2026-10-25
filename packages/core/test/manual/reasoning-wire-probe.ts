@@ -21,7 +21,7 @@ import { createRealUpstream } from './_real-provider.js';
 
 type Obj = Record<string, unknown>;
 
-const MODEL = process.env.K2C_PROBE_MODEL ?? 'claude-opus-5';
+const MODEL = process.env.K2C_PROBE_MODEL ?? 'claude-opus-5.5';
 const GPT_MODEL = process.env.K2C_PROBE_GPT_MODEL ?? 'gpt-5.6-luna';
 const ONLY = new Set((process.env.K2C_PROBE_ONLY ?? '').split(',').filter(Boolean));
 

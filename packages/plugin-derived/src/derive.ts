@@ -7,7 +7,7 @@
  *     credits ≈ (k_in · P_in · T_eff + k_out · P_out · T_out) / overage_rate
  *     T_eff   = T_nonread + KIRO_CACHE_READ_RATIO · T_cache_read
  *
- * with k_in = 0.0556, k_out = 0.6705 fitted on Opus 4.5/4.6 cache-miss data
+ * with k_in = 0.0556, k_out = 0.6705 fitted on Opus cache-miss data
  * (R²=0.9999).
  *
  * Two DISTINCT cache economics live in this file — do not conflate them:
@@ -62,9 +62,8 @@ export const KIRO_OVERAGE_RATE = 0.04;
  * Kiro's cached-input price as a fraction of its base price — the
  * inversion divisor is (missPremium - this), missPremium = 1 unless the
  * model is in KIRO_BILLING. Measured from same-prompt resend
- * probes: round6 2026-07-02 opus-4.8 @37k = 0.52758 (two independent
- * anchor pairs, bit-reproducible) and sonnet-4.5 @24.6k = 0.52822;
- * round2/round5 2026-04 sonnet-4.5 @17.7k = 0.5264. Constant pinned to
+ * probes: opus-4.8 @37k = 0.52758 (two independent anchor pairs,
+ * bit-reproducible); sonnet anchors land within 0.3%. Constant pinned to
  * the opus anchor (0.5276) — opus dominates typical traffic and is
  * the only deterministic multi-anchor measurement. NOT the Anthropic
  * 0.1× cache-read price — using that here caps the derivable hit ratio
@@ -75,13 +74,6 @@ export const KIRO_OVERAGE_RATE = 0.04;
  * dataset, not shipped) — rerun those to refit if upstream changes its
  * cache discount (symptom: estimatedCacheHitRatio drifts and true
  * full-hit resends stop deriving ~1.0).
- *
- * Known residual: haiku-4.5 is billed well below the global k_in line (its
- * round6 miss anchors already derive 0.66-0.89 hit ratios), so haiku
- * requests over-attribute cache. The round6 2-point per-model solve was
- * adversarially audited as ill-conditioned (anchors self-contradictory,
- * ×22.8 error amplification) — do NOT add haiku constants without a
- * dedicated byte-stable grid with a large output-tokens lever.
  *
  * This is the MEASURED default. It can be overridden at runtime via the
  * `KIRO2CLAUDE_CACHE_READ_RATIO` env (see index.ts → `initCacheReadRatio`),
@@ -117,25 +109,7 @@ const HAIKU_5_5_PRICE: ClaudePrice = {
 };
 
 const CLAUDE_PRICE_USD_PER_TOK: ReadonlyMap<string, ClaudePrice> = new Map([
-  [
-    'claude-haiku-4-5',
-    {
-      in: 1e-6,
-      out: 5e-6,
-      cacheRead: 0.1e-6,
-      cacheCreation: 1.25e-6,
-    },
-  ],
   ['claude-haiku-5-5', HAIKU_5_5_PRICE],
-  [
-    'claude-sonnet-4-5',
-    {
-      in: 3e-6,
-      out: 15e-6,
-      cacheRead: 0.3e-6,
-      cacheCreation: 3.75e-6,
-    },
-  ],
   [
     'claude-sonnet-4-6',
     {
@@ -163,15 +137,6 @@ const CLAUDE_PRICE_USD_PER_TOK: ReadonlyMap<string, ClaudePrice> = new Map([
       out: 10e-6,
       cacheRead: 0.2e-6,
       cacheCreation: 2.5e-6,
-    },
-  ],
-  [
-    'claude-opus-4-5',
-    {
-      in: 5e-6,
-      out: 25e-6,
-      cacheRead: 0.5e-6,
-      cacheCreation: 6.25e-6,
     },
   ],
   [
@@ -258,9 +223,8 @@ function kiroBillingFromList(price: ClaudePrice, usdPerListUsd: number): KiroBil
 
 /**
  * Anthropic 标价明显偏离 Kiro 倍率线的模型,反演改用这里的 Kiro 计价;价格表只管
- * `claudeEquivalentCostUsd`。没列的模型直接用价格表单价反演:opus 系正在线上,sonnet-4.x 高 1.5%;haiku
- * 按倍率线算高 10%,与 KIRO_CACHE_READ_RATIO 记录的 haiku 残差同向。实测证据与标定入口见 PITFALLS
- * 「支持哪些模型」。
+ * `claudeEquivalentCostUsd`。没列的模型直接用价格表单价反演:opus 系正在线上,sonnet-4.6 高 1.5%。实测证据与
+ * 标定入口见 PITFALLS「支持哪些模型」。
  *
  * - sonnet-5:1.3x,Kiro 计价与 sonnet-4.6 逐项相同;标价降到 $2/$10 后离开倍率线。
  * - opus-5.5:2.0x,命中与输出按倍率缩放,未命中输入另加 1.942 倍基价。
@@ -291,13 +255,10 @@ const LONG_CONTEXT_TIER: ReadonlyMap<string, LongContextTier> = new Map([
 
 /** Anthropic 最小可缓存前缀(prompt-caching 文档,各平台一致);随代际不单调。 */
 const MODEL_CACHE_THRESHOLD: ReadonlyMap<string, number> = new Map([
-  ['claude-haiku-4-5', 4096],
   ['claude-haiku-5-5', 512],
-  ['claude-sonnet-4-5', 1024],
   ['claude-sonnet-4-6', 1024],
   ['claude-sonnet-5', 1024],
   ['claude-sonnet-5-5', 512],
-  ['claude-opus-4-5', 4096],
   ['claude-opus-4-6', 4096],
   ['claude-opus-4-7', 2048],
   ['claude-opus-4-8', 1024],
@@ -423,12 +384,12 @@ export function resetCreditDerive(): void {
  * upstream id its `mapModel` resolved (dot-form: `claude-opus-4.6`,
  * `claude-opus-5.5`), so client spellings core already accepts (`[1m]`, provider
  * prefixes, case) never reach here. Direct callers and hosts that predate that
- * key may still pass a raw client name: an alias (`claude-haiku-4-5`), a dated
- * snapshot (`claude-haiku-4-5-20251001`), or a `-thinking` variant. Normalize
+ * key may still pass a raw client name: an alias (`claude-opus-4-6`), a dated
+ * snapshot (`claude-opus-4-6-20260205`), or a `-thinking` variant. Normalize
  * non-leading dots to dashes, strip `-thinking`, then strip a trailing
  * `-20YYMMDD` snapshot date — anchored to a `20xx` year so an arbitrary 8-digit
  * tail (e.g. `-12345678`) is NOT mistaken for a date — so all of them map to the
- * undated dash-form key. (Alias `-4-5`/`-5` tails aren't dates → kept.)
+ * undated dash-form key. (Alias `-4-6`/`-5` tails aren't dates → kept.)
  */
 function normalizeModelId(model: string): string {
   // Dot-form → dash-form: upstream ids carry dots, the table is keyed dash-form.

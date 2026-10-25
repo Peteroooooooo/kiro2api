@@ -24,7 +24,7 @@ import { HookBus } from '../../src/plugin-host/index.js';
 import { logger } from '../../src/shared/logger.js';
 import { buildAssistantResponseFrame, framesWithMetering } from '../helpers/event-stream.js';
 
-const MODEL = 'claude-sonnet-4-5-20250929';
+const MODEL = 'claude-opus-5-5';
 /** 与 stream-handler.ts 的 POST_DISCONNECT_DRAIN_IDLE_MS 对齐。 */
 const DRAIN_IDLE_MS = 15_000;
 

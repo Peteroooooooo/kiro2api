@@ -7,7 +7,7 @@
 #   - 非流式 JSON 输出
 #   - stream-json + verbose 流式
 #   - 工具使用 (--allowedTools Read + 挂载 workspace)
-#   - 多模型矩阵 (opus-5 / opus-4.7 / opus-4.6 / sonnet-4.6)
+#   - 多模型矩阵 (opus-5 / opus-4.7 / opus-4.6 / sonnet-4.6;默认模型 opus-5.5 由 01-03 覆盖)
 # 加一个 00-version sanity check 验证镜像版本号一致。
 #
 # 用法见 ./test.sh --help
@@ -30,6 +30,9 @@ TEST_CONTAINER_PREFIX="kiro2claude-cc-test"
 TEST_IMAGE_REPO="kiro2claude-cc-test"
 
 ALL_CASES=("00-version" "01-ping" "02-stream" "03-tool-use" "04-models")
+
+# 01-03 用的默认模型;04-models 矩阵只放其它型号,别与它重复
+DEFAULT_MODEL="claude-opus-5-5"
 
 # ── 颜色 ─────────────────────────────────────────────────────
 
@@ -379,7 +382,7 @@ case_01_ping() {
     out=$(run_in_container "$name" stderr_file -- \
         "$TEST_IMAGE_TAG" \
         -p "Reply with the single word PONG and nothing else." \
-        --output-format json --model claude-opus-5) || rc=$?
+        --output-format json --model "$DEFAULT_MODEL") || rc=$?
 
     end_ts=$(date +%s); dur=$((end_ts - start_ts))
 
@@ -407,7 +410,7 @@ case_02_stream() {
         "$TEST_IMAGE_TAG" \
         -p "Count from 1 to 3, one number per line, no extra prose." \
         --output-format stream-json --verbose --include-partial-messages \
-        --model claude-opus-5) || rc=$?
+        --model "$DEFAULT_MODEL") || rc=$?
 
     end_ts=$(date +%s); dur=$((end_ts - start_ts))
 
@@ -490,7 +493,7 @@ case_03_tool_use() {
         "$TEST_IMAGE_TAG" \
         -p "Read the file secret.txt in the current directory and output ONLY its content verbatim, no other words, no punctuation." \
         --allowedTools "Read" \
-        --output-format json --model claude-opus-5 \
+        --output-format json --model "$DEFAULT_MODEL" \
         2>"$stderr_file") || rc=$?
 
     end_ts=$(date +%s); dur=$((end_ts - start_ts))

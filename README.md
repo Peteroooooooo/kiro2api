@@ -15,16 +15,14 @@
 | `claude-opus-5-5` | 1M | 原生,常开 |
 | `claude-opus-5` · `claude-opus-4-8` · `claude-opus-4-7` | 1M | 原生 |
 | `claude-opus-4-6` | 1M | 无 |
-| `claude-opus-4-5-20251101` | 200K | 无 |
 | `claude-sonnet-5-5` | 1M | 原生,常开 |
 | `claude-sonnet-5` · `claude-sonnet-4-6` | 1M | 原生 |
-| `claude-sonnet-4-5-20250929` | 200K | 无 |
 | `claude-haiku-5-5` | 1M | 原生 |
-| `claude-haiku-4-5-20251001` | 200K | 无 |
 | `gpt-5.6-sol` · `gpt-5.6-terra` · `gpt-5.6-luna` | 922K | 原生,不透明 |
 
 - 两个协议端点共用同一份目录,真相源 [`models-catalog.ts`](./packages/core/src/claude/models-catalog.ts);每个 Claude 模型另有 `-thinking` 变体
 - 「常开」= 上游不接受关闭 thinking,`disabled` 按 adaptive + `low` effort 发送
+- 没有版本号或 4.5 及更老的写法(如 `claude-haiku-4-5`)兜底到同家族最新版本(目前是 5.5);表里没有的其它版本返回 400
 - 计价差异:Opus 5.5 / Sonnet 5.5 冷请求有溢价,Haiku 5.5 与 GPT 的长 prompt 整单加价,系数见 [`plugin-derived`](./packages/plugin-derived/)
 - GPT 窗口未放开的账号设 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW=272000`;Fable 系列 Kiro 尚未提供
 
@@ -47,7 +45,7 @@ pnpm dev
 ```bash
 curl -s http://127.0.0.1:8080/claude/v1/messages \
   -H 'x-api-key: sk-local-test' -H 'content-type: application/json' \
-  -d '{"model":"claude-opus-5","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}'
+  -d '{"model":"claude-opus-5-5","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}'
 ```
 
 ## Docker

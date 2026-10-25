@@ -7,17 +7,18 @@ import {
 } from '../../../src/claude/schemas/messages-request-schema.js';
 
 const VALID_MESSAGE = { role: 'user', content: 'hello' };
+const MODEL = 'claude-opus-5-5';
 
 describe('messagesRequestSchema - required fields', () => {
   it('accepts a minimal valid request', () => {
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       max_tokens: 1024,
       messages: [VALID_MESSAGE],
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.model).toBe('claude-sonnet-4-5');
+      expect(result.data.model).toBe(MODEL);
       expect(result.data.max_tokens).toBe(1024);
       expect(result.data.messages).toHaveLength(1);
     }
@@ -48,7 +49,7 @@ describe('messagesRequestSchema - required fields', () => {
 
   it('rejects missing max_tokens', () => {
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       messages: [VALID_MESSAGE],
     });
     expect(result.success).toBe(false);
@@ -59,7 +60,7 @@ describe('messagesRequestSchema - required fields', () => {
 
   it('rejects missing messages', () => {
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       max_tokens: 1024,
     });
     expect(result.success).toBe(false);
@@ -70,7 +71,7 @@ describe('messagesRequestSchema - required fields', () => {
 
   it('rejects messages of wrong type', () => {
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       max_tokens: 1024,
       messages: 'not an array',
     });
@@ -81,7 +82,7 @@ describe('messagesRequestSchema - required fields', () => {
 describe('messagesRequestSchema - system normalization', () => {
   it('converts string system to [{text}]', () => {
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       max_tokens: 1024,
       messages: [VALID_MESSAGE],
       system: 'You are a helpful assistant',
@@ -94,7 +95,7 @@ describe('messagesRequestSchema - system normalization', () => {
 
   it('preserves an already-array system', () => {
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       max_tokens: 1024,
       messages: [VALID_MESSAGE],
       system: [{ text: 'First' }, { text: 'Second' }],
@@ -107,7 +108,7 @@ describe('messagesRequestSchema - system normalization', () => {
 
   it('filters out invalid system array items', () => {
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       max_tokens: 1024,
       messages: [VALID_MESSAGE],
       system: [{ text: 'kept' }, { notText: 'dropped' }, { text: 'alsoKept' }],
@@ -120,7 +121,7 @@ describe('messagesRequestSchema - system normalization', () => {
 
   it('allows system to be absent', () => {
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       max_tokens: 1024,
       messages: [VALID_MESSAGE],
     });
@@ -172,7 +173,7 @@ describe('messagesRequestSchema - thinking normalization (adaptive only)', () =>
 describe('messagesRequestSchema - passthrough and extras', () => {
   it('preserves unknown top-level fields via passthrough', () => {
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       max_tokens: 1024,
       messages: [VALID_MESSAGE],
       anthropic_beta_flag_not_yet_in_schema: 'preserved',
@@ -187,7 +188,7 @@ describe('messagesRequestSchema - passthrough and extras', () => {
     // The real ContentBlock union validation lives in converter.ts;
     // schema must not pre-empt it or reject novel block types.
     const result = messagesRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       max_tokens: 1024,
       messages: [
         {
@@ -203,12 +204,12 @@ describe('messagesRequestSchema - passthrough and extras', () => {
 describe('countTokensRequestSchema', () => {
   it('accepts a minimal valid request', () => {
     const result = countTokensRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       messages: [VALID_MESSAGE],
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.model).toBe('claude-sonnet-4-5');
+      expect(result.data.model).toBe(MODEL);
     }
   });
 
@@ -219,7 +220,7 @@ describe('countTokensRequestSchema', () => {
 
   it('normalizes string system field', () => {
     const result = countTokensRequestSchema.safeParse({
-      model: 'claude-sonnet-4-5',
+      model: MODEL,
       messages: [VALID_MESSAGE],
       system: 'You are a helpful assistant',
     });

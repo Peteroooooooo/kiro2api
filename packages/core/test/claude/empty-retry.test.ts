@@ -39,7 +39,7 @@ import {
 } from '../helpers/event-stream.js';
 
 const API_KEY = 'sk-test-empty-retry';
-const MODEL = 'claude-sonnet-4-5-20250929';
+const MODEL = 'claude-opus-5-5';
 
 async function* emptyStream(): AsyncIterable<Buffer> {
   // yields nothing → silent failure

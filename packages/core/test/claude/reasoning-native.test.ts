@@ -268,13 +268,9 @@ describe('usesNativeReasoning: 模型能力探测', () => {
     expect(usesNativeReasoning('claude-sonnet-4.6')).toBe(true);
   });
 
-  it('opus-4.6 / 4.5 / sonnet-4.5 / haiku-4.5 非原生:不做 thinking 控制', () => {
-    // opus-4.6:上游 schema 有 thinking,但发了字段既无 reasoning 帧也无 signature,没有可回传的
-    // 东西,不入集合。其余无 schema。
+  it('opus-4.6 非原生:单测的非原生 fixture 靠它', () => {
+    // 单测拿 claude-opus-4-6 当非原生模型的 fixture(AGENTS.md「测试」);它一旦变原生,那些用例会静默改测原生路径
     expect(usesNativeReasoning('claude-opus-4.6')).toBe(false);
-    expect(usesNativeReasoning('claude-opus-4.5')).toBe(false);
-    expect(usesNativeReasoning('claude-sonnet-4.5')).toBe(false);
-    expect(usesNativeReasoning('claude-haiku-4.5')).toBe(false);
   });
 
   it('MODELS_WITH_NATIVE_REASONING 是 exhaustive list', () => {

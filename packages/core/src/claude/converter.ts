@@ -117,7 +117,7 @@ export const DUPLICATE_TOOL_RESULT_TEXT =
 // ============================================================================
 
 /**
- * 紧挨家族名的版本号的两种写法:先认 `opus-4-5` / `opus-4.5` / `opus 4.5`,再认版本在前的
+ * 紧挨家族名的版本号的两种写法:先认 `opus-4-6` / `opus-4.6` / `opus 4.6`,再认版本在前的
  * `claude-3-5-sonnet` / `claude-4.7-opus`。minor 只认 1–2 位且后面不能再跟数字或字母,所以
  * `opus-5-20260720` 的 8 位日期、`opus-5-1m` 的 `1m` 都不是 minor。
  */
@@ -128,7 +128,7 @@ function versionPatterns(family: string): readonly RegExp[] {
   ];
 }
 
-/** 版本号编码为 `major * 100 + minor`(4.5 → 405,5 → 500);没有版本号的写法(`claude-opus`)→ undefined。 */
+/** 版本号编码为 `major * 100 + minor`(4.6 → 406,5 → 500);没有版本号的写法(`claude-opus`)→ undefined。 */
 function claudeFamilyVersion(lower: string, patterns: readonly RegExp[]): number | undefined {
   for (const pattern of patterns) {
     const m = pattern.exec(lower);
@@ -137,20 +137,23 @@ function claudeFamilyVersion(lower: string, patterns: readonly RegExp[]): number
   return undefined;
 }
 
+/**
+ * 已下线那一代的最高版本(4.5,编码同 `claudeFamilyVersion`):表里没有、且不高于它的写法是停用的老模型名,
+ * 与没有版本号的写法一起走家族兜底。下线一代时显式抬高它,别从「比表里最老的还老」推断——表里只剩一个
+ * 版本的家族会把所有更低的编号(含从没存在过的)都吞成兜底。
+ */
+const RETIRED_VERSION_CEILING = 405;
+
 interface ClaudeFamily {
   readonly name: string;
   readonly patterns: readonly RegExp[];
   readonly versions: ReadonlyMap<number, string>;
-  readonly oldest: number;
+  /** 家族最新版本的上游 id */
   readonly fallback: string;
 }
 
 /** 版本号由上游 id 自己解析;上游 id 有的带小数点有的不带(`claude-opus-5`),以 list-models 为准。 */
-function claudeFamily(
-  name: string,
-  upstreamIds: readonly string[],
-  fallback: string,
-): ClaudeFamily {
+function claudeFamily(name: string, upstreamIds: readonly string[]): ClaudeFamily {
   const patterns = versionPatterns(name);
   const versions = new Map<number, string>();
   for (const id of upstreamIds) {
@@ -159,38 +162,34 @@ function claudeFamily(
     if (version === undefined) throw new Error(`no ${name} version in upstream id: ${id}`);
     versions.set(version, id);
   }
-  return { name, patterns, versions, oldest: Math.min(...versions.keys()), fallback };
+  const fallback = versions.get(Math.max(...versions.keys()));
+  if (fallback === undefined) throw new Error(`empty ${name} family`);
+  return { name, patterns, versions, fallback };
 }
 
 const CLAUDE_FAMILIES: readonly ClaudeFamily[] = [
-  claudeFamily(
-    'sonnet',
-    ['claude-sonnet-4.5', 'claude-sonnet-4.6', 'claude-sonnet-5', 'claude-sonnet-5.5'],
-    'claude-sonnet-4.5',
-  ),
-  claudeFamily(
-    'opus',
-    [
-      'claude-opus-4.5',
-      'claude-opus-4.6',
-      'claude-opus-4.7',
-      'claude-opus-4.8',
-      'claude-opus-5',
-      'claude-opus-5.5',
-    ],
+  claudeFamily('sonnet', ['claude-sonnet-4.6', 'claude-sonnet-5', 'claude-sonnet-5.5']),
+  claudeFamily('opus', [
     'claude-opus-4.6',
-  ),
-  claudeFamily('haiku', ['claude-haiku-4.5', 'claude-haiku-5.5'], 'claude-haiku-4.5'),
+    'claude-opus-4.7',
+    'claude-opus-4.8',
+    'claude-opus-5',
+    'claude-opus-5.5',
+  ]),
+  claudeFamily('haiku', ['claude-haiku-5.5']),
 ];
 
 /**
- * 已知版本 → 对应 id;没有版本号、比最老已知版本还老 → 家族兜底;其余表里没有的版本(更新的、
- * 或夹在已知版本之间的)→ undefined(400,不把没上的模型静默换成别的版本)。
+ * 已知版本 → 对应 id;没有版本号、或已下线(不高于 `RETIRED_VERSION_CEILING`)→ 家族兜底(最新版本);
+ * 其余表里没有的版本(更新的、或夹在已知版本之间的)→ undefined(400,不把没上的模型静默换成别的版本)。
  */
 function mapClaudeFamily(lower: string, family: ClaudeFamily): string | undefined {
   const version = claudeFamilyVersion(lower, family.patterns);
-  if (version === undefined || version < family.oldest) return family.fallback;
-  return family.versions.get(version);
+  if (version === undefined) return family.fallback;
+  return (
+    family.versions.get(version) ??
+    (version <= RETIRED_VERSION_CEILING ? family.fallback : undefined)
+  );
 }
 
 /**
@@ -242,8 +241,7 @@ export function mapModel(model: string): string | undefined {
  *   - sonnet-5.5:schema 的 thinking 是 adaptive / between_tools,同样关不掉(见 `MODELS_THINKING_ALWAYS_ON`),
  *     effort 五档、默认 high;
  *   - haiku-5.5:schema 的 thinking 是 adaptive / disabled,effort 五档、默认 medium,reasoning 帧与签名同 opus-5;
- *   - opus-4.6:发字段只涨计费、既无 reasoning 帧也无 signature,没有可回传的东西,不入集合;
- *   - 4.5 及以下(含 haiku-4.5):无 schema。
+ *   - opus-4.6:发字段只涨计费、既无 reasoning 帧也无 signature,没有可回传的东西,不入集合。
  *
  * GPT-5.6 走 `additionalModelRequestFields.reasoning.effort`;其 reasoning 不透明(V3 回
  * `{text:"...", signature}`,文本只是占位),不作为 thinking 展示、只经信封回传——见 stream.ts
@@ -403,42 +401,20 @@ export function clientModelHasEncryptedReasoning(clientModel: string): boolean {
   return mapped !== undefined && isGptModelId(mapped);
 }
 
-/** 1M context 的 Claude 模型(出处见 `getContextWindowSize` 头注释);GPT 窗口单独可配,不列。 */
-const CLAUDE_MODELS_WITH_1M_CONTEXT: ReadonlySet<string> = new Set([
-  'claude-sonnet-4.6',
-  'claude-sonnet-5',
-  'claude-sonnet-5.5',
-  'claude-opus-4.6',
-  'claude-opus-4.7',
-  'claude-opus-4.8',
-  'claude-opus-5',
-  'claude-opus-5.5',
-  'claude-haiku-5.5',
-]);
-
 /**
  * Get context window size for a model.
  *
- * Kiro upgraded Opus 4.6 and Sonnet 4.6 to 1M context on 2026-03-24.
- * Opus 4.7 and 4.8 also ship with the 1M window (上游 list-models 实测确认).
- * Opus 5 同为 1M context (上游 `--list-models` 实测: context_window_tokens 1000000).
- * Sonnet 5 同为 1M context (Anthropic 官方规格,与前代 Sonnet 4.6 一致).
- * Opus 5.5 / Sonnet 5.5 / Haiku 5.5 同为 1M context (上游 `ListAvailableModels` tokenLimits.maxInputTokens 1000000).
- * GPT-5.6 系列的分母随上游漂移、逐账号灰度:默认 `DEFAULT_GPT_CONTEXT_WINDOW`,可由
- * `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 覆盖。
+ * Kiro 上的 Claude 模型都是 1M 窗口(上游 `ListAvailableModels` 的 tokenLimits.maxInputTokens);将来出现
+ * 非 1M 的 Claude 模型时再按模型分表。GPT-5.6 系列的分母随上游漂移、逐账号灰度:默认
+ * `DEFAULT_GPT_CONTEXT_WINDOW`,可由 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 覆盖。认不出的模型走 200K。
  *
  * ★ 返回值是 `resolveContextUsage` 反推 input_tokens 的**乘数**——上游改窗口不报错、
  * 只缩放,后果直通计费。数据与判断口径见踩坑「GPT context window 随上游漂移」。
  */
 export function getContextWindowSize(model: string): number {
   const mapped = mapModel(model);
-  if (mapped !== undefined && CLAUDE_MODELS_WITH_1M_CONTEXT.has(mapped)) {
-    return 1_000_000;
-  }
-  if (mapped !== undefined && isGptModelId(mapped)) {
-    return _gptContextWindow;
-  }
-  return 200_000;
+  if (mapped === undefined) return 200_000;
+  return isGptModelId(mapped) ? _gptContextWindow : 1_000_000;
 }
 
 let _gptContextWindow = DEFAULT_GPT_CONTEXT_WINDOW;

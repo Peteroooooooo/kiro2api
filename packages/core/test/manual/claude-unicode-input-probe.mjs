@@ -10,9 +10,10 @@ import { resolve, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import assert from 'node:assert/strict';
+import { CLAUDE_MODEL } from './_harness.mjs';
 
 const image = process.env.K2C_CLAUDE_IMAGE ?? 'kiro2claude-cc:validation-latest';
-const model = process.env.K2C_UNICODE_MODEL ?? 'claude-opus-5';
+const model = process.env.K2C_UNICODE_MODEL ?? CLAUDE_MODEL;
 const modes = (process.env.K2C_UNICODE_MODES ?? 'whole-delta,chunks-7,char-deltas,unicode-backslash,start-input').split(',');
 const report = resolve(process.env.K2C_UNICODE_REPORT_DIR ?? `test-results/conversation-fixes-2026-09-07/claude-unicode-${Date.now()}`);
 const timeout = Number(process.env.K2C_UNICODE_TIMEOUT_MS ?? 120_000);
@@ -109,7 +110,7 @@ const server = createServer(async (request, response) => {
     const main = parsed.tools?.some(tool => tool.name === 'Bash');
     record.main = main;
     const events = main ? responseEvents(run, parsed, record.id) : [
-      { type: 'message_start', message: { id: `msg_title_${record.id}`, type: 'message', role: 'assistant', model: 'claude-opus-5', content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: 'message_start', message: { id: `msg_title_${record.id}`, type: 'message', role: 'assistant', model, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
       { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
       { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Unicode probe' } },
       { type: 'content_block_stop', index: 0 }, { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }, { type: 'message_stop' },

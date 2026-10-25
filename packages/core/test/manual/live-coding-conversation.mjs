@@ -5,11 +5,12 @@ import { watch } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { prepareCodingWorkspace, prepareCodingPhase, codingPrompt, acceptanceSource, snapshotCodingWorkspace, verifyCodingWorkspace, aggregateCodingEvidence } from './_live-coding-workspace.mjs';
+import { CLAUDE_MODEL } from './_harness.mjs';
 
 const base = process.env.K2C_PROBE_BASE ?? 'http://127.0.0.1:18943';
 const dockerBase = process.env.K2C_PROBE_DOCKER_BASE ?? 'http://host.docker.internal:18943';
 const image = process.env.K2C_CLAUDE_IMAGE ?? 'kiro2claude-cc:validation-latest';
-const model = process.env.K2C_CODING_MODEL ?? 'claude-opus-5';
+const model = process.env.K2C_CODING_MODEL ?? CLAUDE_MODEL;
 const reportDir = resolve(process.env.K2C_CODING_REPORT_DIR ?? 'test-results/conversation-integrity-2026-09-07/coding');
 const scenarios = (process.env.K2C_PROBE_SCENARIOS ?? 'live-baseline,live-mixed').split(',');
 const timeoutMs = Number(process.env.K2C_CODING_PHASE_TIMEOUT_MS ?? 1_200_000);

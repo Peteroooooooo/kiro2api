@@ -17,30 +17,31 @@ afterEach(() => {
 });
 
 // ============================================================================
-// Golden data: 8 points from round3/round4 calibration runs
+// Golden data: 6 points from round3/round4 calibration runs
 // ============================================================================
 // Each row: { source label, model, T_in, T_out, credits, expected ... }
 // Expected values follow the KIRO_CACHE_READ_RATIO inversion divisor
-// (value + provenance: see src/derive.ts). Sonnet/Haiku rounds had cache
-// pollution, so several of them saturate at 100% hit — that is the
+// (value + provenance: see src/derive.ts). Sonnet rounds had cache
+// pollution, so one of them saturates at 100% hit — that is the
 // expected inversion output for under-priced rows, not an error.
 // Tolerances: cache_read / cache_creation / input_tokens ±10 tokens
 //             claudeEquivUsd ±1.5%
 //
 // Notes:
-// - Opus 4.5/4.6 P_in=5e-6, P_out=25e-6, P_cr=0.5e-6, P_cw=6.25e-6
-// - Sonnet 4.5/4.6 P_in=3e-6, P_out=15e-6, P_cr=0.3e-6, P_cw=3.75e-6
-// - Haiku 4.5 P_in=1e-6, P_out=5e-6, P_cr=0.1e-6, P_cw=1.25e-6
+// - Opus 4.6 P_in=5e-6, P_out=25e-6, P_cr=0.5e-6, P_cw=6.25e-6
+// - Sonnet 4.6 P_in=3e-6, P_out=15e-6, P_cr=0.3e-6, P_cw=3.75e-6
+// - Rows recorded on the previous generation share these price tables and
+//   thresholds, so they are keyed to 4.6
 // - Split: input=min(nonRead,10) fixed tail, rest → cache_creation (real Claude Code)
 
 const TOL_TOKENS = 10;
 const TOL_USD_PCT = 0.015;
 
-describe('deriveKiroUsage — 8 golden data points (round3/round4)', () => {
+describe('deriveKiroUsage — 6 golden data points (round3/round4)', () => {
   const cases = [
     {
-      name: 'Opus 4.5 xs_in_xs_out (round3)',
-      model: 'claude-opus-4-5-20251101',
+      name: 'Opus xs_in_xs_out (round3)',
+      model: 'claude-opus-4-6',
       tIn: 4177,
       tOut: 1,
       credits: 0.029191,
@@ -53,8 +54,8 @@ describe('deriveKiroUsage — 8 golden data points (round3/round4)', () => {
       },
     },
     {
-      name: 'Opus 4.5 lg_in_md_out (round3)',
-      model: 'claude-opus-4-5-20251101',
+      name: 'Opus lg_in_md_out (round3)',
+      model: 'claude-opus-4-6',
       tIn: 31593,
       tOut: 109,
       credits: 0.2667,
@@ -67,8 +68,8 @@ describe('deriveKiroUsage — 8 golden data points (round3/round4)', () => {
       },
     },
     {
-      name: 'Opus 4.5 mid_in_md_out (round4)',
-      model: 'claude-opus-4-5-20251101',
+      name: 'Opus mid_in_md_out (round4)',
+      model: 'claude-opus-4-6',
       tIn: 6133,
       tOut: 159,
       credits: 0.113595,
@@ -81,8 +82,8 @@ describe('deriveKiroUsage — 8 golden data points (round3/round4)', () => {
       },
     },
     {
-      name: 'Sonnet 4.5 xs_in_xs_out (round3) — cache_write, non-read → creation',
-      model: 'claude-sonnet-4-5-20250929',
+      name: 'Sonnet xs_in_xs_out (round3) — cache_write, non-read → creation',
+      model: 'claude-sonnet-4-6',
       tIn: 4173,
       tOut: 1,
       credits: 0.011136,
@@ -96,8 +97,8 @@ describe('deriveKiroUsage — 8 golden data points (round3/round4)', () => {
       },
     },
     {
-      name: 'Sonnet 4.5 mid_in_md_out (round4) — cache_write, saturated at 100% hit',
-      model: 'claude-sonnet-4-5-20250929',
+      name: 'Sonnet mid_in_md_out (round4) — cache_write, saturated at 100% hit',
+      model: 'claude-sonnet-4-6',
       tIn: 5907,
       tOut: 108,
       credits: 0.033963,
@@ -110,7 +111,7 @@ describe('deriveKiroUsage — 8 golden data points (round3/round4)', () => {
       },
     },
     {
-      name: 'Sonnet 4.6 mid_in_md_out (round4)',
+      name: 'Sonnet mid_in_md_out (round4) — cold miss',
       model: 'claude-sonnet-4-6',
       tIn: 6143,
       tOut: 159,
@@ -121,34 +122,6 @@ describe('deriveKiroUsage — 8 golden data points (round3/round4)', () => {
         cacheRead: 0,
         status: 'ok_derived',
         claudeUsd: 0.025421,
-      },
-    },
-    {
-      name: 'Haiku 4.5 xs_in_xs_out (round3)',
-      model: 'claude-haiku-4-5-20251001',
-      tIn: 4174,
-      tOut: 1,
-      credits: 0.005305,
-      expected: {
-        inputTokens: 10,
-        cacheCreation: 3280,
-        cacheRead: 884,
-        status: 'ok_derived',
-        claudeUsd: 0.004206,
-      },
-    },
-    {
-      name: 'Haiku 4.5 mid_in_md_out (round4) — cache_write, saturated at 100% hit',
-      model: 'claude-haiku-4-5-20251001',
-      tIn: 5896,
-      tOut: 104,
-      credits: 0.010094,
-      expected: {
-        inputTokens: 0,
-        cacheCreation: 0,
-        cacheRead: 5896,
-        status: 'ok_derived',
-        claudeUsd: 0.00111,
       },
     },
   ] as const;
@@ -199,7 +172,7 @@ describe('deriveKiroUsage — 8 golden data points (round3/round4)', () => {
 // src/derive.ts); under the Kiro ratio it must derive as a full hit.
 
 describe('deriveKiroUsage — resend probe derives full cache hit (round2/round5)', () => {
-  const model = 'claude-sonnet-4-5-20250929';
+  const model = 'claude-sonnet-4-6';
   const tIn = 17727;
   const tOut = 1;
   // Measured probe billing data (round2/round5) — do not regenerate.
@@ -241,23 +214,9 @@ describe('deriveKiroUsage — resend probe derives full cache hit (round2/round5
 // ============================================================================
 
 describe('deriveKiroUsage — cache threshold gating', () => {
-  it('Opus 4.5 + T_in=4095 → below_threshold', () => {
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4095, 1, 0.05);
-    expect(out.derived.derivedStatus).toBe('below_threshold');
-    expect(out.inputTokens).toBe(4095);
-    expect(out.cacheCreationInputTokens).toBe(0);
-    expect(out.cacheReadInputTokens).toBe(0);
-  });
-
-  it('Opus 4.5 + T_in=4096 → enters reverse-engineering', () => {
-    // 4096 == threshold, should pass through
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4096, 1, 0.001);
-    expect(out.derived.derivedStatus).toMatch(/^ok_/);
-  });
-
   // [model, threshold, 进入反演时用的 credits];阈值随代际不单调
   it.each([
-    ['claude-sonnet-4-5-20250929', 1024, 0.001],
+    ['claude-opus-4-6', 4096, 0.001],
     ['claude-sonnet-4-6', 1024, 0.005],
     ['claude-sonnet-5', 1024, 0.001],
     ['claude-sonnet-5-5', 512, 0.001],
@@ -269,6 +228,7 @@ describe('deriveKiroUsage — cache threshold gating', () => {
     const below = deriveKiroUsage(model, threshold - 1, 1, 0.05);
     expect(below.derived.derivedStatus).toBe('below_threshold');
     expect(below.inputTokens).toBe(threshold - 1);
+    expect(below.cacheCreationInputTokens + below.cacheReadInputTokens).toBe(0);
     expect(deriveKiroUsage(model, threshold, 1, credits).derived.derivedStatus).toMatch(/^ok_/);
   });
 });
@@ -288,8 +248,8 @@ describe('deriveKiroUsage — unknown / thinking variants', () => {
   });
 
   it('thinking variant uses base model price table', () => {
-    const baseOut = deriveKiroUsage('claude-opus-4-5-20251101', 5000, 100, 0.05);
-    const thinkingOut = deriveKiroUsage('claude-opus-4-5-20251101-thinking', 5000, 100, 0.05);
+    const baseOut = deriveKiroUsage('claude-opus-4-6', 5000, 100, 0.05);
+    const thinkingOut = deriveKiroUsage('claude-opus-4-6-thinking', 5000, 100, 0.05);
     expect(thinkingOut.inputTokens).toBe(baseOut.inputTokens);
     expect(thinkingOut.cacheCreationInputTokens).toBe(baseOut.cacheCreationInputTokens);
     expect(thinkingOut.cacheReadInputTokens).toBe(baseOut.cacheReadInputTokens);
@@ -297,7 +257,7 @@ describe('deriveKiroUsage — unknown / thinking variants', () => {
   });
 
   it('Opus 4.7 produces identical breakdown as Opus 4.6 (same prices/threshold)', () => {
-    // 4.5/4.6/4.7 share the Anthropic public price table; the breakdown
+    // 4.6/4.7 share the Anthropic public price table; the breakdown
     // and derived USD must match exactly for any input.
     const args = [10000, 200, 0.08] as const;
     const opus46 = deriveKiroUsage('claude-opus-4-6', ...args);
@@ -722,7 +682,7 @@ describe('deriveKiroUsage — GPT branch (cache inverted, cost anchored)', () =>
 // Model-id normalization: alias vs dated snapshot both hit the price table
 // ============================================================================
 // Regression guard (found via live kiro-cli test): the priced model is the raw
-// wire model; undated aliases (`claude-haiku-4-5`) — what Claude Code and most
+// wire model; undated aliases (`claude-opus-4-6`) — what Claude Code and most
 // clients actually send — must hit the price table, or they fall to
 // unknown_model (all input, no cache derivation). normalizeModelId owns all
 // model-id canonicalization to the price-table key: dot-form → dash,
@@ -733,12 +693,10 @@ describe('deriveKiroUsage — model-id normalization to price-table key', () => 
   const ARGS = [10000, 1, 0.05] as const;
 
   it.each([
-    ['haiku alias', 'claude-haiku-4-5'],
-    ['haiku dated snapshot', 'claude-haiku-4-5-20251001'],
-    ['opus-4-5 alias', 'claude-opus-4-5'],
-    ['opus-4-5 dated snapshot', 'claude-opus-4-5-20251101'],
-    ['sonnet-4-5 alias', 'claude-sonnet-4-5'],
-    ['sonnet-4-5 dated snapshot', 'claude-sonnet-4-5-20250929'],
+    ['opus-4-6 alias', 'claude-opus-4-6'],
+    ['opus-4-6 dated snapshot', 'claude-opus-4-6-20260205'],
+    ['sonnet-4-6 alias', 'claude-sonnet-4-6'],
+    ['sonnet-4-6 dated snapshot', 'claude-sonnet-4-6-20260217'],
     ['opus-4-6 dot-form', 'claude-opus-4.6'],
     ['opus-4-6 dot-form + thinking', 'claude-opus-4.6-thinking'],
   ])('%s prices (ok_derived, not unknown_model)', (_label, model) => {
@@ -748,8 +706,8 @@ describe('deriveKiroUsage — model-id normalization to price-table key', () => 
   });
 
   it('alias and dated snapshot produce identical breakdown', () => {
-    const alias = deriveKiroUsage('claude-haiku-4-5', ...ARGS);
-    const dated = deriveKiroUsage('claude-haiku-4-5-20251001', ...ARGS);
+    const alias = deriveKiroUsage('claude-opus-4-6', ...ARGS);
+    const dated = deriveKiroUsage('claude-opus-4-6-20260205', ...ARGS);
     expect(alias.inputTokens).toBe(dated.inputTokens);
     expect(alias.cacheCreationInputTokens).toBe(dated.cacheCreationInputTokens);
     expect(alias.cacheReadInputTokens).toBe(dated.cacheReadInputTokens);
@@ -770,7 +728,7 @@ describe('deriveKiroUsage — model-id normalization to price-table key', () => 
 
 describe('deriveKiroUsage — extreme boundaries', () => {
   it('T_in_total=0 → returns 0 across the board', () => {
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 0, 100, 0.01);
+    const out = deriveKiroUsage('claude-opus-4-6', 0, 100, 0.01);
     expect(out.inputTokens).toBe(0);
     expect(out.cacheCreationInputTokens).toBe(0);
     expect(out.cacheReadInputTokens).toBe(0);
@@ -778,7 +736,7 @@ describe('deriveKiroUsage — extreme boundaries', () => {
 
   it('credits=0 → cache_read clamped to T_in, hit_ratio=1, cache_write', () => {
     const tIn = 10000;
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', tIn, 1, 0);
+    const out = deriveKiroUsage('claude-opus-4-6', tIn, 1, 0);
     expect(out.cacheReadInputTokens).toBe(tIn);
     expect(out.cacheCreationInputTokens).toBe(0);
     expect(out.inputTokens).toBe(0);
@@ -787,7 +745,7 @@ describe('deriveKiroUsage — extreme boundaries', () => {
   });
 
   it('credits much greater than baseline → cache_read=0, cache_write', () => {
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 5000, 1, 1.0);
+    const out = deriveKiroUsage('claude-opus-4-6', 5000, 1, 1.0);
     expect(out.cacheReadInputTokens).toBe(0);
     expect(out.cacheCreationInputTokens).toBe(4990);
     expect(out.inputTokens).toBe(10);
@@ -802,33 +760,33 @@ describe('deriveKiroUsage — extreme boundaries', () => {
 describe('deriveKiroUsage — cost multiplier', () => {
   it('initCreditDerive(2.5) → finalCostUsd × 2.5', () => {
     initCreditDerive(2.5);
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4177, 1, 0.029191);
+    const out = deriveKiroUsage('claude-opus-4-6', 4177, 1, 0.029191);
     expect(out.derived.costMultiplier).toBe(2.5);
     expect(out.derived.finalCostUsd).toBeCloseTo(out.derived.claudeEquivalentCostUsd * 2.5, 10);
   });
 
   it('initCreditDerive(0) is allowed (free tier)', () => {
     initCreditDerive(0);
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4177, 1, 0.029191);
+    const out = deriveKiroUsage('claude-opus-4-6', 4177, 1, 0.029191);
     expect(out.derived.costMultiplier).toBe(0);
     expect(out.derived.finalCostUsd).toBe(0);
   });
 
   it('initCreditDerive(-1) is rejected, multiplier stays 1.0', () => {
     initCreditDerive(-1);
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4177, 1, 0.029191);
+    const out = deriveKiroUsage('claude-opus-4-6', 4177, 1, 0.029191);
     expect(out.derived.costMultiplier).toBe(1.0);
   });
 
   it('initCreditDerive(NaN) is rejected, multiplier stays 1.0', () => {
     initCreditDerive(Number.NaN);
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4177, 1, 0.029191);
+    const out = deriveKiroUsage('claude-opus-4-6', 4177, 1, 0.029191);
     expect(out.derived.costMultiplier).toBe(1.0);
   });
 
   it('initCreditDerive(2000) is rejected (the >1000 gate lives in derive), stays 1.0', () => {
     initCreditDerive(2000);
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4177, 1, 0.029191);
+    const out = deriveKiroUsage('claude-opus-4-6', 4177, 1, 0.029191);
     expect(out.derived.costMultiplier).toBe(1.0);
   });
 
@@ -843,7 +801,7 @@ describe('deriveKiroUsage — cost multiplier', () => {
   it('resetCreditDerive() returns multiplier to 1.0', () => {
     initCreditDerive(3.0);
     resetCreditDerive();
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4177, 1, 0.029191);
+    const out = deriveKiroUsage('claude-opus-4-6', 4177, 1, 0.029191);
     expect(out.derived.costMultiplier).toBe(1.0);
   });
 });
@@ -856,21 +814,21 @@ describe('deriveKiroUsage — upstream cost floor', () => {
   it('floor activates when claudeUsd × multiplier < credits × 0.04', () => {
     // tiny multiplier: 0.0259 × 0.01 = 0.000259, floor = 0.029191 × 0.04 = 0.001168
     initCreditDerive(0.01);
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4177, 1, 0.029191);
+    const out = deriveKiroUsage('claude-opus-4-6', 4177, 1, 0.029191);
     expect(out.derived.floorApplied).toBe(true);
     expect(out.derived.finalCostUsd).toBeCloseTo(0.029191 * KIRO_OVERAGE_RATE, 10);
   });
 
   it('floorApplied=false when algorithm value exceeds floor', () => {
     // default multiplier=1.0: claudeUsd ≈ 0.0259 > floor 0.001168
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4177, 1, 0.029191);
+    const out = deriveKiroUsage('claude-opus-4-6', 4177, 1, 0.029191);
     expect(out.derived.floorApplied).toBe(false);
     expect(out.derived.finalCostUsd).toBeCloseTo(out.derived.claudeEquivalentCostUsd, 10);
   });
 
   it('multiplier=0 bypasses floor (explicit free tier)', () => {
     initCreditDerive(0);
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 4177, 1, 0.029191);
+    const out = deriveKiroUsage('claude-opus-4-6', 4177, 1, 0.029191);
     expect(out.derived.floorApplied).toBe(false);
     expect(out.derived.finalCostUsd).toBe(0);
   });
@@ -887,7 +845,7 @@ describe('deriveKiroUsage — upstream cost floor', () => {
   it('floor protects below_threshold path too', () => {
     // tiny request, multiplier=0.001 → claudeUsd × m is microscopic
     initCreditDerive(0.001);
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 100, 5, 0.001);
+    const out = deriveKiroUsage('claude-opus-4-6', 100, 5, 0.001);
     expect(out.derived.derivedStatus).toBe('below_threshold');
     expect(out.derived.floorApplied).toBe(true);
     expect(out.derived.finalCostUsd).toBeCloseTo(0.001 * KIRO_OVERAGE_RATE, 10);
@@ -901,9 +859,9 @@ describe('deriveKiroUsage — upstream cost floor', () => {
 describe('deriveKiroUsage — Anthropic protocol identity', () => {
   // Cover all derivedStatus paths to ensure identity holds everywhere.
   const fixtures: Array<[string, string, number, number, number]> = [
-    ['ok_derived Opus', 'claude-opus-4-5-20251101', 5000, 100, 0.05],
-    ['ok_derived Sonnet', 'claude-sonnet-4-5-20250929', 5907, 108, 0.033963],
-    ['below_threshold', 'claude-opus-4-5-20251101', 100, 5, 0.001],
+    ['ok_derived Opus', 'claude-opus-4-6', 5000, 100, 0.05],
+    ['ok_derived Sonnet', 'claude-sonnet-4-6', 5907, 108, 0.033963],
+    ['below_threshold', 'claude-opus-4-6', 100, 5, 0.001],
     ['unknown_model', 'mistral-large', 5000, 100, 0.05],
     ['gpt_credit_anchored', 'gpt-5.6-sol', 3596, 1, 0.02873918],
   ];
@@ -927,11 +885,11 @@ describe('deriveKiroUsage — Anthropic protocol identity', () => {
 describe('initCacheReadRatio — cache-read ratio knob', () => {
   // A partial-hit request under the measured default: opus xs derives ~1.9% hit
   // (cacheRead≈79). Used to show the knob amplifies the reported split.
-  const ARGS = ['claude-opus-4-5-20251101', 4177, 1, 0.029191] as const;
+  const ARGS = ['claude-opus-4-6', 4177, 1, 0.029191] as const;
 
   it('measured default leaves the faithful inversion unchanged', () => {
     const out = deriveKiroUsage(...ARGS);
-    // Matches the golden "Opus 4.5 xs_in_xs_out" point (cacheRead≈79).
+    // Matches the golden "Opus xs_in_xs_out" point (cacheRead≈79).
     expect(out.cacheReadInputTokens).toBeGreaterThanOrEqual(69);
     expect(out.cacheReadInputTokens).toBeLessThanOrEqual(89);
     expect(out.derived.derivedStatus).toBe('ok_derived');
@@ -950,7 +908,7 @@ describe('initCacheReadRatio — cache-read ratio knob', () => {
   it('a partial-hit request saturates to 100% under 0.99', () => {
     // Sonnet steady golden (cacheRead≈3308 / ~79% at default) → clamps to full.
     initCacheReadRatio(0.99);
-    const out = deriveKiroUsage('claude-sonnet-4-5-20250929', 4173, 1, 0.011136);
+    const out = deriveKiroUsage('claude-sonnet-4-6', 4173, 1, 0.011136);
     expect(out.cacheReadInputTokens).toBe(4173);
     expect(out.derived.estimatedCacheHitRatio).toBe(1);
     expect(out.derived.derivedStatus).toBe('ok_derived');
@@ -960,7 +918,7 @@ describe('initCacheReadRatio — cache-read ratio knob', () => {
     // credits high enough that tEffIn >= inputTokensTotal → cacheRead=0 branch,
     // which the ratio knob never touches.
     initCacheReadRatio(0.99);
-    const out = deriveKiroUsage('claude-opus-4-5-20251101', 5000, 1, 1.0);
+    const out = deriveKiroUsage('claude-opus-4-6', 5000, 1, 1.0);
     expect(out.cacheReadInputTokens).toBe(0);
     expect(out.derived.derivedStatus).toBe('ok_derived');
   });
@@ -1006,7 +964,7 @@ describe('initCacheReadRatio — cache-read ratio knob', () => {
 // afterEach's resetCreditDerive clears the module state register() mutates.
 
 describe('DerivedPlugin.register — env parsing', () => {
-  const PARTIAL = ['claude-opus-4-5-20251101', 4177, 1, 0.029191] as const;
+  const PARTIAL = ['claude-opus-4-6', 4177, 1, 0.029191] as const;
 
   // Minimal PluginContext: register() only touches env / logger / registerHook.
   function makeCtx(env: NodeJS.ProcessEnv) {

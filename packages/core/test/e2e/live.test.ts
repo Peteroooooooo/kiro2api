@@ -50,6 +50,9 @@ const HAS_ENV = Boolean(process.env.KIRO2CLAUDE_API_KEY && process.env.KIRO2CLAU
 // routinely take 10s+. Bump generously per test.
 const LIVE_TIMEOUT_MS = 90_000;
 
+// 真打上游的默认测试模型(AGENTS.md「测试」);逐模型能力用例自己写死型号。
+const LIVE_MODEL = 'claude-opus-5-5';
+
 // ============================================================================
 // SSE parsing helper
 // ============================================================================
@@ -63,6 +66,18 @@ function joinTextDeltas(events: SseEvent[]): string {
       return delta?.text ?? '';
     })
     .join('');
+}
+
+/**
+ * 原生 reasoning 模型没提 thinking 时也走 adaptive,首块可能是 thinking:只要求有 text 块、
+ * 且它之前只有 thinking 块(协议规定的顺序),返回第一个 text 块的文本。
+ */
+function firstTextAfterThinking(content: Array<{ type: string; text?: string }>): string {
+  const textIdx = content.findIndex((b) => b.type === 'text');
+  expect(textIdx).toBeGreaterThanOrEqual(0);
+  const before = content.slice(0, textIdx).map((b) => b.type);
+  expect(before.every((t) => t === 'thinking' || t === 'redacted_thinking')).toBe(true);
+  return content[textIdx]?.text ?? '';
 }
 
 // ============================================================================
@@ -168,7 +183,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 200,
           messages: [{ role: 'user', content: 'Answer in one sentence: what is 1+1?' }],
         },
@@ -185,8 +200,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         };
       };
       expect(body.stop_reason).toBe('end_turn');
-      expect(body.content[0]?.type).toBe('text');
-      expect(body.content[0]?.text).toMatch(/2/);
+      expect(firstTextAfterThinking(body.content)).toMatch(/2/);
       // kiro-cli disguise system prompt injected by converter => total input > 1000 tokens.
       // OFF 模式（默认）反演覆盖把 `input_tokens` 当成 uncached only，cache 命中时
       // 可能为 0；总 input 必须包含 cache_* 三项之和(见 plugin-derived README)。
@@ -217,7 +231,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 300,
           messages: [
             {
@@ -258,7 +272,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 100,
           messages: [{ role: 'user', content: 'hi' }],
         },
@@ -289,7 +303,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
           url: '/claude/v1/messages',
           headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
           payload: {
-            model: 'claude-opus-5',
+            model: LIVE_MODEL,
             max_tokens: 300,
             system,
             messages: [
@@ -332,7 +346,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
           url: '/claude/v1/messages',
           headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
           payload: {
-            model: 'claude-opus-5',
+            model: LIVE_MODEL,
             max_tokens: 100,
             messages: [{ role: 'user', content }],
           },
@@ -359,7 +373,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 200,
           stream: true,
           messages: [
@@ -400,7 +414,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 1024,
           tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
           stream: true,
@@ -476,7 +490,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 400,
           messages: [
             {
@@ -509,7 +523,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
           cache_read_input_tokens?: number;
         };
       };
-      expect(body.content[0]?.type).toBe('text');
+      const text = firstTextAfterThinking(body.content);
       // Image tokenization adds ~400+ tokens on top of the ~1500 baseline.
       // 反演 OFF 模式下 input_tokens 是 uncached only，必须把 cache_* 加回算总数。
       const totalInput =
@@ -518,7 +532,6 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         (body.usage.cache_read_input_tokens ?? 0);
       expect(totalInput).toBeGreaterThan(1500);
       expect(body.usage.output_tokens).toBeGreaterThan(0);
-      const text = body.content[0]?.text ?? '';
       expect(text.length).toBeGreaterThan(0);
       // Loose keyword presence — any ONE of these proves the model
       // actually saw the image. Observed hits in manual runs: "A",
@@ -543,7 +556,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
       url: '/claude/v1/messages/count_tokens',
       headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
       payload: {
-        model: 'claude-opus-5',
+        model: LIVE_MODEL,
         messages: [{ role: 'user', content: 'What is the latest price of Bitcoin?' }],
       },
     });
@@ -598,7 +611,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 500,
           tools: [weatherTool],
           messages: [
@@ -638,7 +651,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 500,
           tools: [weatherTool],
           messages: [
@@ -715,7 +728,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 500,
           stream: true,
           tools: [calculatorTool],
@@ -821,7 +834,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 800,
           tools: [taskTool],
           messages: [
@@ -903,7 +916,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 1500,
           tools: [taskTool],
           messages: [
@@ -1005,7 +1018,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 400,
           tools: [longNameTool],
           messages: [
@@ -1048,11 +1061,9 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
   // --------------------------------------------------------------------------
   // 13. Long chain — multi-turn Read/Write/Edit file operation
   //
-  //     Drives a 3-turn conversation through the Claude Code style Read /
-  //     Write / Edit tools:
-  //       Turn 1: user -> Read tool_use
-  //       Turn 2: Read tool_result -> Edit tool_use
-  //       Turn 3: Edit tool_result -> final end_turn text
+  //     Drives the Claude Code style Read / Write / Edit tools as an agent
+  //     loop until end_turn, bounded by MAX_TURNS (tool simulation: see the
+  //     inline comment).
   //
   //     Purpose:
   //       - Exercise Write/Edit tool round-trips across a multi-turn history.
@@ -1061,12 +1072,12 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
   //       - Exercise tool_use / tool_result pairing across >2 historical
   //         exchanges (validateToolPairing in converter.ts).
   //       - Exercise the placeholder-tool path (createPlaceholderTool in
-  //         converter.ts) — by turn 3 the history references tool names
+  //         converter.ts) — in later turns the history references tool names
   //         that may or may not still be in req.tools; converter must
   //         backfill missing ones from history.
   //
-  //     Timing: three sequential upstream requests of ~10-20s each; stays
-  //     comfortably under LIVE_TIMEOUT_MS (90s).
+  //     Timing: typically 3-6 sequential upstream requests of a few seconds
+  //     each; stays under LIVE_TIMEOUT_MS (90s).
   // --------------------------------------------------------------------------
   it(
     '13. POST /claude/v1/messages multi-turn Read/Edit file operation chain (long-chain)',
@@ -1124,105 +1135,84 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         },
       ];
 
-      // --- Turn 1: expect Read tool_use ---
-      const turn1 = await app.inject({
-        method: 'POST',
-        url: '/claude/v1/messages',
-        headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
-        payload: {
-          model: 'claude-opus-5',
-          max_tokens: 500,
-          tools,
-          messages,
-        },
-      });
-      expect(turn1.statusCode).toBe(200);
-      const turn1Body = turn1.json() as {
-        content: Array<Record<string, unknown>>;
+      // 工具环境照真实客户端模拟:文件有状态,工具结果由模型实际给的参数算出;Edit 照 Claude Code
+      // 的语义,old_string 找不到或不唯一都回 is_error。模型怎么拆步骤(并行改、回读核实、出错重试)
+      // 由它决定,测试只跑 agent loop 到 end_turn,断言网关该保证的东西。
+      let fileContent = '# Notes\nTODO: buy milk\nTODO: call Alice\n';
+      type ToolCall = { id: string; name: string; input: Record<string, unknown> };
+      const runTool = (call: ToolCall): { content: string; is_error?: true } => {
+        expect(String(call.input.file_path ?? '')).toBe(filePath);
+        switch (call.name) {
+          case 'Read':
+            return { content: fileContent };
+          case 'Write':
+            fileContent = String(call.input.content ?? '');
+            return { content: 'File written successfully.' };
+          case 'Edit': {
+            const oldString = String(call.input.old_string ?? '');
+            const matches = oldString === '' ? 0 : fileContent.split(oldString).length - 1;
+            if (matches === 0)
+              return { content: 'Error: old_string not found in file.', is_error: true };
+            if (matches > 1) {
+              return {
+                content: `Error: old_string matches ${matches} locations; include more context to make it unique.`,
+                is_error: true,
+              };
+            }
+            fileContent = fileContent.replace(oldString, String(call.input.new_string ?? ''));
+            return { content: 'File edited successfully.' };
+          }
+          default:
+            return { content: `Error: unknown tool ${call.name}.`, is_error: true };
+        }
+      };
+
+      type TurnBody = {
+        content: Array<{ type: string; text?: string } & Partial<ToolCall>>;
         stop_reason: string;
       };
-      expect(turn1Body.stop_reason).toBe('tool_use');
-      const readBlock = turn1Body.content.find(
-        (b) => b.type === 'tool_use' && (b as { name?: string }).name === 'Read',
-      ) as { id?: string; name?: string; input?: Record<string, unknown> } | undefined;
-      expect(readBlock).toBeDefined();
-      expect(String(readBlock?.input?.file_path ?? '')).toBe(filePath);
-
-      // Append assistant response + synthetic Read tool_result
-      messages.push({ role: 'assistant', content: turn1Body.content });
-      messages.push({
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: readBlock?.id,
-            content: '# Notes\nTODO: buy milk\nTODO: call Alice\n',
+      const MAX_TURNS = 8;
+      const calledTools: string[] = [];
+      let last: TurnBody | undefined;
+      for (let turn = 1; turn <= MAX_TURNS; turn++) {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/claude/v1/messages',
+          headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
+          payload: {
+            model: LIVE_MODEL,
+            max_tokens: 500,
+            tools,
+            messages,
           },
-        ],
-      });
-
-      // --- Turn 2: expect Edit tool_use ---
-      const turn2 = await app.inject({
-        method: 'POST',
-        url: '/claude/v1/messages',
-        headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
-        payload: {
-          model: 'claude-opus-5',
-          max_tokens: 500,
-          tools,
-          messages,
-        },
-      });
-      expect(turn2.statusCode).toBe(200);
-      const turn2Body = turn2.json() as {
-        content: Array<Record<string, unknown>>;
-        stop_reason: string;
-      };
-      expect(turn2Body.stop_reason).toBe('tool_use');
-      const editBlock = turn2Body.content.find(
-        (b) => b.type === 'tool_use' && (b as { name?: string }).name === 'Edit',
-      ) as { id?: string; name?: string; input?: Record<string, unknown> } | undefined;
-      expect(editBlock).toBeDefined();
-      const editInput = editBlock?.input ?? {};
-      expect(String(editInput.file_path ?? '')).toBe(filePath);
-      // Model may pick a single "TODO" occurrence or the whole phrase — loose match
-      expect(String(editInput.old_string ?? '').toUpperCase()).toContain('TODO');
-      expect(String(editInput.new_string ?? '').toUpperCase()).toContain('DONE');
-
-      // Append Edit assistant + synthetic Edit tool_result
-      messages.push({ role: 'assistant', content: turn2Body.content });
-      messages.push({
-        role: 'user',
-        content: [
-          {
+        });
+        expect(res.statusCode).toBe(200);
+        last = res.json() as TurnBody;
+        if (last.stop_reason !== 'tool_use') break;
+        const calls = last.content.filter(
+          (b): b is TurnBody['content'][number] & ToolCall => b.type === 'tool_use',
+        );
+        expect(calls.length).toBeGreaterThan(0);
+        // prompt 要求先 Read:第一轮就判,不对就别再花后面几轮的钱
+        if (turn === 1) expect(calls[0]?.name).toBe('Read');
+        calledTools.push(...calls.map((call) => call.name));
+        messages.push({ role: 'assistant', content: last.content });
+        messages.push({
+          role: 'user',
+          content: calls.map((call) => ({
             type: 'tool_result',
-            tool_use_id: editBlock?.id,
-            content: 'File edited successfully. 1 replacement made.',
-          },
-        ],
-      });
+            tool_use_id: call.id,
+            ...runTool(call),
+          })),
+        });
+      }
 
-      // --- Turn 3: expect final text, end_turn ---
-      const turn3 = await app.inject({
-        method: 'POST',
-        url: '/claude/v1/messages',
-        headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
-        payload: {
-          model: 'claude-opus-5',
-          max_tokens: 500,
-          tools,
-          messages,
-        },
-      });
-      expect(turn3.statusCode).toBe(200);
-      const turn3Body = turn3.json() as {
-        content: Array<{ type: string; text?: string }>;
-        stop_reason: string;
-      };
-      expect(turn3Body.stop_reason).toBe('end_turn');
-      const finalText = turn3Body.content.find((b) => b.type === 'text')?.text ?? '';
-      expect(finalText.length).toBeGreaterThan(0);
-      // Loose keyword presence — the model should acknowledge completion
+      // Read 之后至少一次 Edit / Write,且工具参数完整穿过网关、真的改到了文件
+      expect(calledTools.slice(1).some((name) => name === 'Edit' || name === 'Write')).toBe(true);
+      expect(fileContent).toContain('DONE');
+      // loop 收敛:最后一轮正常结束并给出文本
+      expect(last?.stop_reason).toBe('end_turn');
+      const finalText = firstTextAfterThinking(last?.content ?? []);
       expect(finalText).toMatch(/done|TODO|DONE|edit|updated|replaced|success/i);
     },
     LIVE_TIMEOUT_MS,
@@ -1251,7 +1241,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 2000,
           thinking: { type: 'adaptive' },
           messages: [
@@ -1328,7 +1318,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 2000,
           stream: true,
           thinking: { type: 'adaptive' },
@@ -1588,7 +1578,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 16384,
           system: [
             { text: 'You are Claude Code, Anthropic official CLI for Claude.' },
@@ -1682,7 +1672,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 500,
           tools,
           messages: [{ role: 'user', content: firstPrompt }],
@@ -1705,7 +1695,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 500,
           tools,
           messages: [
@@ -1763,7 +1753,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
   // --------------------------------------------------------------------------
   // 18. Parallel regular tool_use — three Reads in one response
   //
-  //     Claude 4.5/4.6 routinely parallelizes independent file reads. This
+  //     Claude 4.6+ routinely parallelizes independent file reads. This
   //     exercises the non-stream-handler.ts accumulation loop (lines 112-148)
   //     under a REGULAR tool (not Task), verifying that multiple tool_use
   //     blocks of the same name with distinct ids and distinct input bodies
@@ -1795,7 +1785,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 1500,
           tools: [readTool],
           messages: [
@@ -1871,7 +1861,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 200,
           messages: [
             {
@@ -1919,7 +1909,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 300,
           tools: [
             {
@@ -1988,7 +1978,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 200,
           tools: [
             {
@@ -2045,7 +2035,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 100,
           messages: [
             {
@@ -2084,7 +2074,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 200,
           messages: [
             {
@@ -2132,7 +2122,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
         url: '/claude/v1/messages',
         headers: { 'x-api-key': apiKey, 'content-type': 'application/json' },
         payload: {
-          model: 'claude-opus-5',
+          model: LIVE_MODEL,
           max_tokens: 64,
           system: 'You are a helper.',
           messages: [{ role: 'user', content: 'Reply with the single word: ready' }],

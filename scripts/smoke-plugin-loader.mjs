@@ -114,7 +114,7 @@ if (fs.existsSync(echoPath)) {
   await echoPlugin.register(ctx);
 
   const event = new UsageFinishEventImpl({
-    model: 'claude-opus-4.6',
+    model: 'claude-opus-5.5',
     source: 'http-direct',
     inputTokensSource: 'client-estimate',
     meta: { 'kiro.inputTokens': 5000, 'kiro.outputTokens': 200 },

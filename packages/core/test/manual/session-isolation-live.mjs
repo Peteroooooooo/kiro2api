@@ -5,7 +5,7 @@
  *   1. 隔离:会话 A 埋一个随机暗号,再用**同一个** `prompt_cache_key`(= 同一个 conversationId)
  *      开一段全新的会话 B 问暗号,B 必须答 NONE;带 A 的历史问(正对照)必须答得出。
  *   2. 缓存:同键第二轮的 credit 必须明显低于第一轮(GPT;Claude 短提示低于缓存门槛,不判)。
- *   3. 推理往返:GPT 与 claude-opus-5 各一次,effort high 带 `include:["reasoning.encrypted_content"]`,
+ *   3. 推理往返:GPT 与 `CLAUDE_MODEL` 各一次,effort high 带 `include:["reasoning.encrypted_content"]`,
  *      把回来的 reasoning item 原样放回下一轮,上游必须照收(200、有输出)。签名是否被接受要看网关
  *      日志里没有 `retrying without reasoningContent`。
  *
@@ -19,7 +19,15 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { KEY, postJson, RESPONSES_PATH, reporter, responsesHeaders } from './_harness.mjs';
+import {
+  CLAUDE_MODEL,
+  GPT_MODEL,
+  KEY,
+  postJson,
+  RESPONSES_PATH,
+  reporter,
+  responsesHeaders,
+} from './_harness.mjs';
 
 const CHAT_PATH = '/openai/v1/chat/completions';
 const MODELS = (process.env.K2C_ISOLATION_MODELS ?? 'gpt-5.6-luna,gpt-5.6-sol,claude-sonnet-5')
@@ -74,7 +82,7 @@ for (const model of MODELS) {
   }
 }
 
-const ROUNDTRIP_MODELS = [MODELS.find((m) => m.startsWith('gpt-')) ?? 'gpt-5.6-sol', 'claude-opus-5'];
+const ROUNDTRIP_MODELS = [MODELS.find((m) => m.startsWith('gpt-')) ?? GPT_MODEL, CLAUDE_MODEL];
 for (const model of ROUNDTRIP_MODELS) {
   const key = randomUUID();
   const base = {

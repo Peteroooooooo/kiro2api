@@ -10,6 +10,7 @@ import { mkdir, writeFile, readFile, readdir, rename, access } from 'node:fs/pro
 import { resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { prepareWorkspace, verifyWorkspace } from './_conversation-workspace.mjs';
+import { CLAUDE_MODEL } from './_harness.mjs';
 
 const base = process.env.K2C_PROBE_BASE ?? 'http://127.0.0.1:18941';
 const dockerBase = process.env.K2C_PROBE_DOCKER_BASE ?? 'http://host.docker.internal:18941';
@@ -191,7 +192,7 @@ async function run(scenario) {
             : 'Audit the entire completed task in this same session. Run node /workspace/probe-task.mjs verify audit. Report the original facts and all verified outputs; never claim a tool succeeded without its actual successful result.'
       } Each STEP must use a separate real tool call. Do not combine steps in a loop, batch, or wrapper script. Do not read or modify probe-task.mjs to simulate execution. End with LONG_PHASE_DONE:${phase} steps=${phase === 'build' ? 12 : 15} proof=<the actual verification proof>.`;
       const args = ['exec', container, '/home/claude/entrypoint.sh', '-p', prompt,
-        '--model', 'claude-opus-5', '--output-format', 'stream-json', '--verbose',
+        '--model', CLAUDE_MODEL, '--output-format', 'stream-json', '--verbose',
         '--include-partial-messages', '--max-turns', '60', '--tools', 'Bash',
         '--dangerously-skip-permissions', '--effort', 'high',
         '--debug-file', `/workspace/claude-debug-${phase}.log`,

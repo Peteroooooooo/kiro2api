@@ -16,6 +16,7 @@
 
 import fs from 'node:fs';
 import {
+  CLAUDE_MODEL,
   CLAUDE_PATH,
   checkClaudeInvariants,
   claudeHeaders,
@@ -26,7 +27,7 @@ import {
 } from './_harness.mjs';
 
 const LOG = process.env.K2C_GATEWAY_LOG ?? '/tmp/k2c-gateway.log';
-const MODEL = process.env.K2C_PROBE_MODEL ?? 'claude-opus-5';
+const MODEL = process.env.K2C_PROBE_MODEL ?? CLAUDE_MODEL;
 const PUZZLE =
   process.env.K2C_PROBE_PROMPT ??
   'How many positive integers below 1000 are divisible by 7 or by 11 but not by both? Work it out carefully. Reply with ONLY the number.';
