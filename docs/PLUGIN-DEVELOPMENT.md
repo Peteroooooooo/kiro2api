@@ -72,7 +72,7 @@ interface KiroPlugin {
 }
 ```
 
-继承 `BasePlugin` 可省去 apiVersion 样板。
+继承 `BasePlugin` 可省去 apiVersion 样板;布尔 env 用导出的 `parseEnvBool` 解析(与 host 同口径)。
 
 ### Context
 
@@ -93,7 +93,7 @@ Capability 是 host 在不暴露内部类型的前提下提供的命名服务。
 
 | Capability 名 | 形状 | 提供方 |
 |---|---|---|
-| `'usage-limits'` | `UsageLimitsProvider`(`getUsageLimits(): Promise<UsageSnapshot>`) | core |
+| `'usage-limits'` | `UsageLimitsProvider`(`getUsageLimits(): Promise<UsageSnapshot>`,`limit` / `current`;`resetAt` 当前 host 不填) | core |
 
 ### Hooks(钩子)
 
@@ -122,9 +122,9 @@ core 把这些约定键写入每个 `UsageFinishEvent`。插件用 `event.getMet
 
 这张表就是契约本身:core 侧有静态守卫(`packages/core/test/static/usage-meta-contract.test.ts`)把它与实际写入的键钉在一起,表里没有的键 core 不会产出。
 
-**`kiro.meteringMissing` 怎么用**:`creditsUsed` 为空有两种成因——真·空响应(本就没有 credit,静默跳过是对的)与「上游算了账、网关没收到账单」。只有后者是漏账,这个键把两者分开。⚠ 它度量的是「有产出但没拿到计量帧」,并**不等于**「有 credit 没记账」的全集,口径偏差(哪些情况多报、哪些漏报)见 core 侧 `isMeteringLost` 的头注释。
+**`kiro.meteringMissing` 怎么用**:`creditsUsed` 为空有两种成因——真·空响应(本就没有 credit,静默跳过是对的)与「上游算了账、网关没收到账单」。只有后者是漏账,这个键把两者分开。注意它度量的是「有产出但没拿到计量帧」,并**不等于**「有 credit 没记账」的全集,口径偏差(哪些情况多报、哪些漏报)见 core 侧 `isMeteringLost` 的头注释。
 
-**`event.listMetaKeys()`** 返回本次事件上所有已填充的键。⚠ **有键 ≠ 有值**:core 每次都会写入全部约定键,读不到数据时表现为**值**是 `undefined`,而不是键消失。判断可用性一律用 `getMeta(k) === undefined`,不要用 `listMetaKeys().includes(k)`——后者恒为真。`listMetaKeys()` 的用途是调试,以及探测更高版本 host 新增的键。
+**`event.listMetaKeys()`** 返回本次事件上所有已填充的键。**有键 ≠ 有值**:core 每次都会写入全部约定键,读不到数据时表现为**值**是 `undefined`,而不是键消失。判断可用性一律用 `getMeta(k) === undefined`,不要用 `listMetaKeys().includes(k)`——后者恒为真。`listMetaKeys()` 的用途是调试,以及探测更高版本 host 新增的键。
 
 ### Wire 改写
 
@@ -158,14 +158,14 @@ OpenAI 端点并入 `addExtension` 的扩展;`overrideStandardField` 只取 `cac
 
 ## 契约的版本管理
 
-`@kiro2claude/plugin-api` 遵循 semver。插件声明 `apiVersion: '1.x'` 以接入整条 1.x 线。host 注册前用 `assertApiVersion` 校验,只接受字面量 `'1.x'`,其它取值跳过该插件。
+`@kiro2claude/plugin-api` 遵循 semver(破坏性改动 = major,策略见 `packages/plugin-api/src/types.ts` 头注释)。插件声明 `apiVersion: '1.x'` 以接入整条 1.x 线。host 注册前用 `assertApiVersion` 校验,只接受字面量 `'1.x'`,其它取值跳过该插件。
 
 当 2.0 落地(破坏性变更)时,适配后把插件的 `apiVersion` 改为 `'2.x'`。
 
 ## 示例
 
 - [`packages/examples/echo-plugin/`](../packages/examples/echo-plugin) —— 最小契约示范
-- first-party 企业插件在闭源仓,但同样基于这套契约编写。
+- [`packages/plugin-metering/`](../packages/plugin-metering/)、[`packages/plugin-derived/`](../packages/plugin-derived/) —— 内置插件,同样只经契约接入
 
 ## 许可证
 
