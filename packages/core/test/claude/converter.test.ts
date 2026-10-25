@@ -14,6 +14,7 @@ import {
 import { MODELS } from '../../src/claude/models-catalog.js';
 import type { Tool as ClaudeTool, MessagesRequest, Metadata } from '../../src/claude/types.js';
 import { preprocessSystem } from '../../src/claude/types.js';
+import { getKiroClientProfile } from '../../src/kiro/client-profile.js';
 import { deriveConversationId } from '../../src/kiro/model/requests/conversation.js';
 import { serializeKiroRequest } from '../../src/kiro/model/requests/kiro.js';
 import { logger } from '../../src/shared/logger.js';
@@ -313,10 +314,10 @@ describe('convertRequest - kiro-cli V3 (KAS) body shape', () => {
       }),
     );
     const cs = body.conversationState;
-    // 交互会话的身份(fixture 录自交互式 TUI)
-    expect(cs.currentMessage.userInputMessage.origin).toBe('KIRO_CLI');
+    const { origin } = getKiroClientProfile().kas.body;
+    expect(cs.currentMessage.userInputMessage.origin).toBe(origin);
     for (const h of cs.history) {
-      if (h.userInputMessage) expect(h.userInputMessage.origin).toBe('KIRO_CLI');
+      if (h.userInputMessage) expect(h.userInputMessage.origin).toBe(origin);
     }
     expect(cs.agentTaskType).toBe('vibe');
     expect(cs.chatTriggerType).toBe('MANUAL');

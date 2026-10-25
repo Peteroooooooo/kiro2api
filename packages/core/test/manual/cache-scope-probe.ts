@@ -58,8 +58,10 @@ const isGpt = MODEL.startsWith('gpt');
 const WORDS = Number(process.env.K2C_WORDS ?? 4000);
 const RUN = randomUUID().slice(0, 8);
 
+const kasBody = getKiroClientProfile().kas.body;
+
 const user = (content: string) => ({
-  userInputMessage: { content, modelId: MODEL, origin: getKiroClientProfile().kas.body.origin },
+  userInputMessage: { content, modelId: MODEL, origin: kasBody.origin },
 });
 const asst = (content: string) => ({ assistantResponseMessage: { content } });
 
@@ -69,12 +71,12 @@ function body(conv: string, history: Obj[], current: string): Obj {
       conversationId: conv,
       rootConversationId: conv,
       agentContinuationId: randomUUID(),
-      agentTaskType: 'vibe',
-      chatTriggerType: 'MANUAL',
+      agentTaskType: kasBody.agentTaskType,
+      chatTriggerType: kasBody.chatTriggerType,
       currentMessage: user(current),
       ...(history.length ? { history } : {}),
     },
-    agentMode: 'vibe',
+    agentMode: kasBody.agentMode,
     additionalModelRequestFields: isGpt
       ? { reasoning: { effort: 'none' } }
       : { thinking: { type: 'disabled' } },

@@ -7,7 +7,8 @@
  *   - target `AmazonCodeWhispererStreamingService.*`、UA service `codewhispererstreaming`
  *   - REST 路径 `…kiro.dev/generateAssistantResponse` / `…kiro.dev/mcp`
  *   - body 的 `envState`、assistant 的 `messageId`
- * `origin: KIRO_CLI` 不在此列:V3 交互会话同样发它(非交互会话发 `AI_EDITOR`),值来自 fixture。
+ * `origin` 的取值不是 V2 的判别子(V3 交互会话同样发 `KIRO_CLI`,非交互会话发 `AI_EDITOR`),这里钉的是
+ * 来源:只能取自 client profile,字面量只许出现在 `kiro/client-profile.ts` 的兜底快照里。
  * GetUsageLimits 仍由 kiro-cli 的 Rust 外壳发,它的 `AmazonCodeWhispererService` target 不在此列。
  */
 
@@ -26,6 +27,11 @@ const FORBIDDEN: Array<[string, RegExp, (rel: string) => boolean]> = [
   ['V2 UA service id', /codewhispererstreaming/, () => true],
   ['V2 REST paths', /kiro\.dev\/(generateAssistantResponse|mcp)\b/, () => true],
   ['V2 envState', /\benvState\b/, () => true],
+  [
+    'origin literal outside the client profile',
+    /['"](KIRO_CLI|AI_EDITOR)['"]/,
+    (rel) => rel !== path.join('kiro', 'client-profile.ts'),
+  ],
   ['V2 assistant messageId', /\bmessageId\b/, isWireBodyBuilder],
 ];
 
