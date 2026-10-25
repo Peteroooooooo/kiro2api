@@ -27,8 +27,8 @@ import { z } from 'zod';
 import type { Config } from '../config.js';
 
 /**
- * GPT-5.6 系列 context window 的默认值 = 上游 `contextUsagePercentage` 的分母(2026-09-14 起 1M,
- * 2026-10 起 922000,与 `ListAvailableModels` 的 `maxInputTokens` 一致)。
+ * GPT-5.6 系列 context window 的默认值 = 上游 `contextUsagePercentage` 的分母(= `ListAvailableModels`
+ * 给 GPT 的 `maxInputTokens`);漂移史与测法见踩坑「GPT context window 随上游漂移」。
  *
  * ★ 单一真相源:`KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 的 schema 默认值、`converter.ts` 的
  * 模块单例初值、`index.ts` 判断「是否被覆盖」的基准,三者必须是同一个数。此前 schema

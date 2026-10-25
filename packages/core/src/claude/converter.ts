@@ -424,8 +424,8 @@ const CLAUDE_MODELS_WITH_1M_CONTEXT: ReadonlySet<string> = new Set([
  * Opus 5 同为 1M context (上游 `--list-models` 实测: context_window_tokens 1000000).
  * Sonnet 5 同为 1M context (Anthropic 官方规格,与前代 Sonnet 4.6 一致).
  * Opus 5.5 / Sonnet 5.5 / Haiku 5.5 同为 1M context (上游 `ListAvailableModels` tokenLimits.maxInputTokens 1000000).
- * GPT-5.6 系列的分母随上游漂移:此前 272K,2026-09-14 起 1M,2026-10 起 922000(`maxInputTokens`;
- * 同前缀追加已知 token 数实测分母 = 922000.0),逐账号灰度,故可由 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 覆盖。
+ * GPT-5.6 系列的分母随上游漂移、逐账号灰度:默认 `DEFAULT_GPT_CONTEXT_WINDOW`,可由
+ * `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 覆盖。
  *
  * ★ 返回值是 `resolveContextUsage` 反推 input_tokens 的**乘数**——上游改窗口不报错、
  * 只缩放,后果直通计费。数据与判断口径见踩坑「GPT context window 随上游漂移」。
