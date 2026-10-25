@@ -71,7 +71,7 @@ export function createPostResponses(deps: PostMessagesDeps) {
     const stream = oaiReq.stream ?? false;
     const session = responsesSession(oaiReq.prompt_cache_key, request.headers['thread-id']);
 
-    // 这行是本请求的**唯一**日志(CLAUDE.md 日志红线),故转换必须在它之前完成:
+    // 这行是本请求的**唯一**日志(日志红线「每请求只打一行」),故转换必须在它之前完成:
     // tool_count 要记**转换后**的数量——code mode 下顶层 tools 不存在(工具在 input 的
     // additional_tools 里),读顶层会把这类请求恒记成 0,而「工具全丢」只在这个字段上可见。
     // 转换抛错时也不能把这行吞掉(那正是最需要它的时候),故兜住异常补记再抛。

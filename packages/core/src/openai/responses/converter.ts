@@ -340,7 +340,7 @@ const PLAINTEXT_BODY_MESSAGE_TYPES: ReadonlySet<string> = new Set(['NEW_TASK', '
  * 元信息头与正文都保留、且**保持原顺序**:头里有 Sender / Task name / Payload 分段,
  * 只留正文会让接收方不知道这是谁发来的、是派活还是交活。`author` / `recipient` 是
  * 客户端侧的线程路由信息,不进模型上下文。
- * 正文本身不进日志(CLAUDE.md 日志红线:不记 prompt / 子任务正文),只记类型与是否转了正文。
+ * 正文本身不进日志(不记 prompt / 子任务正文),只记类型与是否转了正文。
  */
 function convertAgentMessage(item: ResponsesAgentMessageItem): ClaudeMessage | undefined {
   const parts: ResponsesContentPart[] = Array.isArray(item.content) ? item.content : [];

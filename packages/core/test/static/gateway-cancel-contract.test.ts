@@ -8,7 +8,7 @@
  * disconnect (`upstreamAbort.abort()`). Both leave a tool_use frozen mid-transfer
  * with no `isComplete` — the exact shape the terminal path reports as
  * `upstream truncated tool_use`, which ops reads as the first triage step for
- * "client reports a bad tool argument" (CLAUDE.md 速查表). Unmarked, every
+ * "client reports a bad tool argument" (PITFALLS「客户端报 InputValidationError 怎么查」). Unmarked, every
  * disconnect files a false report against the upstream for a wound we inflicted.
  *
  * `ctx.gatewayTruncatedUpstream` is that mark, and it is set **next to** each

@@ -189,7 +189,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
       expect(body.content[0]?.text).toMatch(/2/);
       // kiro-cli disguise system prompt injected by converter => total input > 1000 tokens.
       // OFF 模式（默认）反演覆盖把 `input_tokens` 当成 uncached only，cache 命中时
-      // 可能为 0；总 input 必须包含 cache_* 三项之和。详见 CLAUDE.md "两种 usage 形态"。
+      // 可能为 0；总 input 必须包含 cache_* 三项之和(见 plugin-derived README)。
       const totalInput =
         body.usage.input_tokens +
         (body.usage.cache_creation_input_tokens ?? 0) +
@@ -320,7 +320,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
       // Degenerate empty content passes through the converter as an empty string
       // (processMessageContent never throws on "" or []), so it cannot itself
       // crash the gateway. It is, however, exactly the input that can elicit a
-      // deterministic upstream empty stream (CLAUDE.md trap #15). The response
+      // deterministic upstream empty stream (踩坑「空流有界重试」). The response
       // must stay *handled* — 200 (answered), 400 (upstream rejected empty), or
       // 503 (bounded-retry exhausted) — and never leak the backend identity in
       // ANY body shape (model content OR a neutralized error). A raw 500 here
@@ -934,7 +934,7 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
       ) as Array<{ id?: string; input?: Record<string, unknown> }>;
       // Expect at least two parallel Task calls. If the model degrades to a
       // single call, tighten this assertion only after verifying it isn't a
-      // model-behavior flake — see CLAUDE.md "Live end-to-end" note.
+      // model-behavior flake.
       expect(taskBlocks.length).toBeGreaterThanOrEqual(2);
 
       // Each block has a distinct id and a valid input shape

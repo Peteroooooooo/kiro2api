@@ -36,8 +36,8 @@
  *
  * 观察错误策略把第 1 步换成 `PROBE_STATUS=503`（或 `PROBE_STATUS=429
  * PROBE_RESP_HEADERS='{"retry-after":"7"}'`），然后数 `raw.json` 里 GAR 的
- * `x-kiro-attempt` 与时间戳。2.21.1 实测结论见 CLAUDE.md 速查表「kiro-cli 自己
- * 怎么处理 5xx/429」。
+ * `x-kiro-attempt` 与时间戳。2.21.1 实测结论见 PITFALLS「kiro-cli 自己
+ * 怎么处理 5xx / 429 / 400」。
  */
 
 import fs from 'node:fs';

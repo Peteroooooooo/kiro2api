@@ -1,6 +1,6 @@
 # 踩坑陷阱:来龙去脉与实测证据
 
-[CLAUDE.md](../CLAUDE.md)「高频踩坑陷阱」每条只留红线与真相源,这里是同名条目的长版:为什么这样定、实测看到了什么、怎么复跑。标题与 CLAUDE.md 一一对应,改标题两处同步。证据数据以代码头注释与守卫测试为准;这里只保留代码里没有归宿的部分(`test-results/` 不进仓库)。
+[AGENTS.md](../AGENTS.md)「高频踩坑陷阱」每条只留红线与真相源,这里是同名条目的长版:为什么这样定、实测看到了什么、怎么复跑。标题与 AGENTS.md 一一对应,改标题两处同步。证据数据以代码头注释与守卫测试为准;这里只保留代码里没有归宿的部分(`test-results/` 不进仓库)。
 
 ## 请求转换 · 工具(Claude→Kiro)
 
@@ -88,7 +88,7 @@ Kiro wire 只有消息级 `images[]`——`toolResults[].content` 塞 Bedrock �
 
 后果直通计费:Kiro 对 >272K 的请求**整条**按双倍档计(sol 4.4x→8.8x),命中部分也翻倍(见「GPT credit 锚定与缓存反演」)。实测 gpt-5.6-luna 单请求 250,338 token 记 18.25 credit/M、301,919 token 记 36.50,恰好 2.0 倍(测量时每请求随机 conversationId,无缓存折扣干扰,见「会话身份映射到 kiro-cli」)。低报时客户端以为还有余量,真实上下文养到 ~95 万,整段会话每条都落双倍档,单请求可达正常档的数十倍。双倍档本身没有别的缓解。
 
-**为什么分母必须与上游一致**:Codex 不读网关上报的窗口,只拿 `input_tokens` 比自己内置的常量——Codex 0.154 对 gpt-5.6-sol 内置 272000 再乘 0.95 保留系数 = 258,400(session rollout 的 `model_context_window` 可查)。上报准确时它在真实 258.4K 就压缩,**恰停在双倍线下方,余量 13,600**;低报 3.68 倍时同一个 258.4K 对应真实 950,912,于是整段双倍;高报 8.46% 时则在真实约 238K 就提前压缩。★ 这个余量依赖客户端那个常量不变:**客户端若跟进抬到 1M,余量立刻消失**,届时须在客户端侧 pin `model_context_window`。
+**为什么分母必须与上游一致**:Codex 不读网关上报的窗口,只拿 `input_tokens` 比自己内置的常量——Codex 0.154 对 gpt-5.6-sol 内置 272000 再乘 0.95 保留系数 = 258,400(session rollout 的 `model_context_window` 可查)。上报准确时它在真实 258.4K 就压缩,**恰停在双倍线下方,余量 13,600**;低报 3.68 倍时同一个 258.4K 对应真实 950,912,于是整段双倍;高报 8.46% 时则在真实约 238K 就提前压缩。注意这个余量依赖客户端那个常量不变:**客户端若跟进抬到 1M,余量立刻消失**,届时须在客户端侧 pin `model_context_window`。
 
 Kiro 逐账号灰度,还停在 272K 的账号把 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 设回 272000(反过来高报会让客户端在 7 万就压缩)。判断口径:同一前缀追加已知个数的单 token 词(o200k 下「空格 + the / of / and 这类常见词」各 1 token),Δ百分比 × 分母 = Δtoken,直接解出分母,不依赖分词器(2026-10-24 luna 两段 10,000 词增量都解出 922000.0,约 0.4 credit);`ListAvailableModels` 的 GPT `maxInputTokens` 也给这个数。守卫 `test/claude/reasoning-native.test.ts`;`exceeded`(`model_context_window_exceeded`)只看百分比是否到 100,与此常量无关。
 

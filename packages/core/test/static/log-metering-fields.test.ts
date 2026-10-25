@@ -28,7 +28,7 @@
  * than behavioural — asserting it at runtime would pin today's call sites rather
  * than the "one constructor" property.
  *
- * Matches CLAUDE.md 日志规范「一个指标只有一个 owner」and mirrors
+ * Matches 日志红线「一个指标只有一个 owner」and mirrors
  * `log-capacity-reason.test.ts`. The plugin-side twin of the same predicate
  * (`kiro.meteringMissing`) is pinned by `usage-meta-contract.test.ts`; one
  * predicate with two outlets needs both nailed down.

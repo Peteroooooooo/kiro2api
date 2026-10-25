@@ -7,8 +7,7 @@
  * 唯一字符串字段 `input` 转发,响应侧再取回。编解码必须成对。
  *
  * 放 `openai/` 而非 `openai/responses/`:Chat Completions 也有 `type:"custom"`(嵌套在
- * `custom` 下,Responses 是扁平),目前无客户端故未实现(CLAUDE.md 踩坑「Codex code mode」
- * 末段),将来接入只需再加一层 wire 形状适配。
+ * `custom` 下,Responses 是扁平),目前无客户端故未实现(踩坑「Codex code mode」),将来接入只需再加一层 wire 形状适配。
  */
 
 /**
