@@ -645,14 +645,16 @@ export function deriveKiroUsage(
 
   // Step 2: invert credits → effective uncached input (in base-price tokens)
   const visibleOut = clamp(outputTokens, 0, inputTokensTotal);
-  const tier = tierFactor(LONG_CONTEXT_TIER.get(normalizedModel), inputTokensTotal - visibleOut);
+  const promptTokens = inputTokensTotal - visibleOut;
+  // 分档是整单加价:credits 先折回低档,反演与成本公式都按低档单价算
+  const tierMult = tierFactor(LONG_CONTEXT_TIER.get(normalizedModel), promptTokens);
   const kiro = KIRO_BILLING.get(normalizedModel) ?? { in: cp.in, out: cp.out, missPremium: 1 };
-  const kiroUsd = credits * KIRO_OVERAGE_RATE;
-  const kiroInputUsd = Math.max(0, kiroUsd - KIRO_K_OUT * kiro.out * tier * outputTokens);
-  const tEffIn = kiroInputUsd / (KIRO_K_IN * kiro.in * tier);
+  const kiroUsd = (credits * KIRO_OVERAGE_RATE) / tierMult;
+  const kiroInputUsd = Math.max(0, kiroUsd - KIRO_K_OUT * kiro.out * outputTokens);
+  const tEffIn = kiroInputUsd / (KIRO_K_IN * kiro.in);
   // 未命中溢价只作用于 prompt:T 含本轮输出,输出按输出价计、不带溢价(opus-5.5 与 opus-5 的
   // 输出单价比正好是倍率 2.0/2.2)。把溢价乘到整个 T 上,冷请求会凭空多出约 0.67 × 输出的命中。
-  const allMiss = kiro.missPremium * (inputTokensTotal - visibleOut) + visibleOut;
+  const allMiss = kiro.missPremium * promptTokens + visibleOut;
 
   let cacheRead: number;
   if (tEffIn >= allMiss) {
@@ -683,7 +685,7 @@ export function deriveKiroUsage(
   // Step 4: cost — using Anthropic public price table, then floor against
   // upstream cost so finalCostUsd never falls below `credits × KIRO_OVERAGE_RATE`.
   const claudeUsd =
-    tier *
+    tierMult *
     (uncached * cp.in +
       cacheCreation * cp.cacheCreation +
       cacheRead * cp.cacheRead +
