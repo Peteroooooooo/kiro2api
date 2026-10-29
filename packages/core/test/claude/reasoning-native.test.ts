@@ -17,6 +17,7 @@ import {
   clientModelHasEncryptedReasoning,
   convertRequest,
   effectiveThinking,
+  effortFromBudget,
   getContextWindowSize,
   initGptContextWindow,
   MODELS_WITH_NATIVE_REASONING,
@@ -218,10 +219,21 @@ describe('resolveEffort: adaptive 的档位', () => {
     expect(resolveEffort(undefined, 'claude-opus-4.7')).toBe('xhigh');
   });
 
-  it('客户端的 enabled 在入口归一成 adaptive(budget_tokens 丢弃),下游只见 adaptive', () => {
+  it('客户端的 enabled 在入口归一成 adaptive,budget_tokens 留作 effort 的兜底', () => {
     expect(normalizeThinking({ type: 'enabled', budget_tokens: 100000 })).toEqual({
       type: 'adaptive',
+      budgetTokens: 100000,
     });
+  });
+
+  it('budget_tokens 折成 effort:4K 内 low、16K 内 medium、32K 内 high、64K 内 xhigh,再大 max', () => {
+    expect(effortFromBudget(undefined)).toBeUndefined();
+    expect(effortFromBudget(1024)).toBe('low');
+    expect(effortFromBudget(4096)).toBe('low');
+    expect(effortFromBudget(10_000)).toBe('medium');
+    expect(effortFromBudget(32_000)).toBe('high');
+    expect(effortFromBudget(64_000)).toBe('xhigh');
+    expect(effortFromBudget(100_000)).toBe('max');
   });
 });
 
@@ -231,7 +243,7 @@ describe('effectiveThinking / responseThinkingEnabled: 上游字段与响应侧�
     expect(effectiveThinking({ type: 'disabled' }, 'claude-opus-5')).toEqual({ type: 'disabled' });
   });
 
-  it('thinking 常开的 opus-5.5 / sonnet-5.5:disabled 也按 adaptive(上游 schema 无 disabled)', () => {
+  it('thinking 关不掉的 opus-5.5 / sonnet-5.5:disabled 也按 adaptive(上游 schema 无 disabled)', () => {
     for (const m of ['claude-opus-5.5', 'claude-sonnet-5.5']) {
       expect(effectiveThinking({ type: 'disabled' }, m)?.type).toBe('adaptive');
       expect(effectiveThinking(undefined, m)?.type).toBe('adaptive');
@@ -239,8 +251,8 @@ describe('effectiveThinking / responseThinkingEnabled: 上游字段与响应侧�
   });
 
   it('非原生模型不做 thinking 控制,原样返回', () => {
-    expect(effectiveThinking(undefined, 'claude-opus-4.6')).toBeUndefined();
-    expect(effectiveThinking({ type: 'adaptive' }, 'claude-opus-4.6')).toEqual({
+    expect(effectiveThinking(undefined, 'claude-opus-4.5')).toBeUndefined();
+    expect(effectiveThinking({ type: 'adaptive' }, 'claude-opus-4.5')).toEqual({
       type: 'adaptive',
     });
   });
@@ -249,8 +261,9 @@ describe('effectiveThinking / responseThinkingEnabled: 上游字段与响应侧�
     expect(responseThinkingEnabled(undefined, 'claude-opus-5')).toBe(true);
     expect(responseThinkingEnabled({ type: 'disabled' }, 'claude-opus-5')).toBe(false);
     expect(responseThinkingEnabled({ type: 'disabled' }, 'claude-opus-5-5')).toBe(true);
-    expect(responseThinkingEnabled(undefined, 'claude-opus-4-6')).toBe(false);
-    expect(responseThinkingEnabled({ type: 'adaptive' }, 'claude-opus-4-6')).toBe(true);
+    expect(responseThinkingEnabled({ type: 'disabled' }, 'claude-sonnet-5-5')).toBe(true);
+    expect(responseThinkingEnabled(undefined, 'claude-opus-4-5')).toBe(false);
+    expect(responseThinkingEnabled({ type: 'adaptive' }, 'claude-opus-4-5')).toBe(true);
   });
 
   it('GPT 推理不透明、不走 thinking 通道,恒 false', () => {
@@ -268,14 +281,23 @@ describe('usesNativeReasoning: 模型能力探测', () => {
     expect(usesNativeReasoning('claude-sonnet-4.6')).toBe(true);
   });
 
-  it('opus-4.6 非原生:单测的非原生 fixture 靠它', () => {
-    // 单测拿 claude-opus-4-6 当非原生模型的 fixture(AGENTS.md「测试」);它一旦变原生,那些用例会静默改测原生路径
-    expect(usesNativeReasoning('claude-opus-4.6')).toBe(false);
+  it('4.5 系与非 Claude 模型非原生(上游 schema 没有 thinking 字段)', () => {
+    for (const m of [
+      'claude-opus-4.5',
+      'claude-sonnet-4.5',
+      'claude-haiku-4.5',
+      'kimi-k3',
+      'auto',
+    ]) {
+      expect(usesNativeReasoning(m), m).toBe(false);
+    }
   });
 
   it('MODELS_WITH_NATIVE_REASONING 是 exhaustive list', () => {
     expect([...MODELS_WITH_NATIVE_REASONING].sort()).toEqual(
       [
+        // 2026-10-29 ListAvailableModels:thinking adaptive / disabled、effort 无 xhigh
+        'claude-opus-4.6',
         'claude-opus-4.7',
         'claude-opus-4.8',
         // Opus 5 比照 4.7/4.8 走原生（上游 modelId claude-opus-5，摘要 thinking + signature）
@@ -339,7 +361,7 @@ describe('clientModelHasEncryptedReasoning: 仅 GPT(加密 reasoning)命中', ()
   });
 
   it('非原生 / 未知模型 → false', () => {
-    expect(clientModelHasEncryptedReasoning('claude-opus-4.6')).toBe(false);
+    expect(clientModelHasEncryptedReasoning('claude-opus-4.5')).toBe(false);
     expect(clientModelHasEncryptedReasoning('totally-unknown-model')).toBe(false);
   });
 });
@@ -370,11 +392,29 @@ describe('convertRequest: 顶层 additionalModelRequestFields(effort 唯一生�
   it('4.7 + 客户端 enabled(入口归一为 adaptive)→ 上 wire 是 adaptive,effort 取 output_config 或模型默认(4.7 为 xhigh)', () => {
     const noEffort = baseMessagesRequest({
       model: 'claude-opus-4-7',
-      thinking: normalizeThinking({ type: 'enabled', budget_tokens: 4096 }),
+      thinking: normalizeThinking({ type: 'enabled' }),
     });
     expect(convertRequest(noEffort).additionalModelRequestFields).toEqual({
       thinking: { type: 'adaptive' },
       output_config: { effort: 'xhigh' },
+    });
+    // 旧式预算(Cherry Studio 等)折成档位,只在没给 output_config.effort 时生效
+    const budget = baseMessagesRequest({
+      model: 'claude-opus-4-7',
+      thinking: normalizeThinking({ type: 'enabled', budget_tokens: 4096 }),
+    });
+    expect(convertRequest(budget).additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'low' },
+    });
+    const budgetAndEffort = baseMessagesRequest({
+      model: 'claude-opus-4-7',
+      thinking: normalizeThinking({ type: 'enabled', budget_tokens: 4096 }),
+      output_config: { effort: 'max' },
+    });
+    expect(convertRequest(budgetAndEffort).additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'max' },
     });
     const withEffort = baseMessagesRequest({
       model: 'claude-opus-4-7',
@@ -445,9 +485,13 @@ describe('convertRequest: 顶层 additionalModelRequestFields(effort 唯一生�
       convertRequest(baseMessagesRequest({ model: 'gpt-5.6-sol' })).additionalModelRequestFields,
     ).toEqual({ reasoning: { effort: 'high' } });
     expect(
-      convertRequest(baseMessagesRequest({ model: 'claude-opus-4-6' }))
+      convertRequest(baseMessagesRequest({ model: 'claude-opus-4-5' }))
         .additionalModelRequestFields,
     ).toBeUndefined();
+    expect(
+      convertRequest(baseMessagesRequest({ model: 'claude-opus-4-6' }))
+        .additionalModelRequestFields,
+    ).toEqual({ thinking: { type: 'adaptive' }, output_config: { effort: 'high' } });
     expect(
       convertRequest(baseMessagesRequest({ model: 'claude-opus-5-5' }))
         .additionalModelRequestFields,
@@ -469,7 +513,7 @@ describe('convertRequest: 顶层 additionalModelRequestFields(effort 唯一生�
     });
   });
 
-  it('常开模型(opus-5.5 / sonnet-5.5):adaptive + xhigh/max 原样;disabled → adaptive + low(上游 schema 无 disabled,发了 400)', () => {
+  it('关不掉思考的模型(opus-5.5 / sonnet-5.5):adaptive + xhigh/max 原样;disabled → adaptive + low(上游 schema 无 disabled,发了 400)', () => {
     for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5']) {
       const at = (effort: string) =>
         convertRequest(baseMessagesRequest({ model, ...adaptive(effort) }))
@@ -523,15 +567,23 @@ describe('convertRequest: 顶层 additionalModelRequestFields(effort 唯一生�
     // 非原生模型:顶层不多出一个 undefined 的 additionalModelRequestFields 键
     const plain = JSON.parse(
       serializeKiroRequest(
-        toKiroRequest(convertRequest(baseMessagesRequest({ model: 'claude-opus-4-6' }))),
+        toKiroRequest(convertRequest(baseMessagesRequest({ model: 'claude-opus-4-5' }))),
       ),
     );
     expect(Object.keys(plain)).toEqual(['conversationState', 'agentMode']);
   });
 
-  it('4.6 + thinking → 不注入任何前缀、不发顶层字段(旧模型用上游默认)', () => {
+  it('opus-4.6 走原生,xhigh 降为 high(上游 schema 无 xhigh)', () => {
+    const req = baseMessagesRequest({ model: 'claude-opus-4-6', ...adaptive('xhigh') });
+    expect(convertRequest(req).additionalModelRequestFields).toEqual({
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+    });
+  });
+
+  it('4.5 + thinking → 不注入任何前缀、不发顶层字段(非原生模型用上游默认)', () => {
     const req = baseMessagesRequest({
-      model: 'claude-opus-4-6',
+      model: 'claude-opus-4-5',
       ...adaptive('max'),
       messages: [{ role: 'user', content: 'compute 1+1' }],
     });

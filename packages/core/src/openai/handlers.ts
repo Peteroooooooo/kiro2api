@@ -74,8 +74,7 @@ export function createPostChatCompletions(deps: PostMessagesDeps) {
       has_session_key: oaiReq.prompt_cache_key !== undefined,
     });
 
-    // OpenAI → Claude MessagesRequest（reasoning_effort 已在此映射成
-    // thinking/output_config，故不调 overrideThinkingFromModelName）。
+    // OpenAI → Claude MessagesRequest（reasoning_effort 已在此映射成 thinking/output_config）。
     const payload = convertOpenAiRequest(oaiReq);
 
     const provider = deps.kiroProvider;

@@ -109,7 +109,34 @@ const HAIKU_5_5_PRICE: ClaudePrice = {
 };
 
 const CLAUDE_PRICE_USD_PER_TOK: ReadonlyMap<string, ClaudePrice> = new Map([
+  [
+    'claude-haiku-4-5',
+    {
+      in: 1e-6,
+      out: 5e-6,
+      cacheRead: 0.1e-6,
+      cacheCreation: 1.25e-6,
+    },
+  ],
   ['claude-haiku-5-5', HAIKU_5_5_PRICE],
+  [
+    'claude-sonnet-4-5',
+    {
+      in: 3e-6,
+      out: 15e-6,
+      cacheRead: 0.3e-6,
+      cacheCreation: 3.75e-6,
+    },
+  ],
+  [
+    'claude-opus-4-5',
+    {
+      in: 5e-6,
+      out: 25e-6,
+      cacheRead: 0.5e-6,
+      cacheCreation: 6.25e-6,
+    },
+  ],
   [
     'claude-sonnet-4-6',
     {
@@ -255,6 +282,9 @@ const LONG_CONTEXT_TIER: ReadonlyMap<string, LongContextTier> = new Map([
 
 /** Anthropic 最小可缓存前缀(prompt-caching 文档,各平台一致);随代际不单调。 */
 const MODEL_CACHE_THRESHOLD: ReadonlyMap<string, number> = new Map([
+  ['claude-haiku-4-5', 4096],
+  ['claude-sonnet-4-5', 1024],
+  ['claude-opus-4-5', 4096],
   ['claude-haiku-5-5', 512],
   ['claude-sonnet-4-6', 1024],
   ['claude-sonnet-5', 1024],

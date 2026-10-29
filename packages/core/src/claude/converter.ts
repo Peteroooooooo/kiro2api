@@ -138,11 +138,11 @@ function claudeFamilyVersion(lower: string, patterns: readonly RegExp[]): number
 }
 
 /**
- * 已下线那一代的最高版本(4.5,编码同 `claudeFamilyVersion`):表里没有、且不高于它的写法是停用的老模型名,
+ * 已下线那一代的最高版本(4.1,编码同 `claudeFamilyVersion`):表里没有、且不高于它的写法是停用的老模型名,
  * 与没有版本号的写法一起走家族兜底。下线一代时显式抬高它,别从「比表里最老的还老」推断——表里只剩一个
  * 版本的家族会把所有更低的编号(含从没存在过的)都吞成兜底。
  */
-const RETIRED_VERSION_CEILING = 405;
+const RETIRED_VERSION_CEILING = 401;
 
 interface ClaudeFamily {
   readonly name: string;
@@ -168,16 +168,40 @@ function claudeFamily(name: string, upstreamIds: readonly string[]): ClaudeFamil
 }
 
 const CLAUDE_FAMILIES: readonly ClaudeFamily[] = [
-  claudeFamily('sonnet', ['claude-sonnet-4.6', 'claude-sonnet-5', 'claude-sonnet-5.5']),
+  claudeFamily('sonnet', [
+    'claude-sonnet-4.5',
+    'claude-sonnet-4.6',
+    'claude-sonnet-5',
+    'claude-sonnet-5.5',
+  ]),
   claudeFamily('opus', [
+    'claude-opus-4.5',
     'claude-opus-4.6',
     'claude-opus-4.7',
     'claude-opus-4.8',
     'claude-opus-5',
     'claude-opus-5.5',
   ]),
-  claudeFamily('haiku', ['claude-haiku-5.5']),
+  claudeFamily('haiku', ['claude-haiku-4.5', 'claude-haiku-5.5']),
 ];
+
+/**
+ * 上游 `ListAvailableModels` 里 Claude / GPT 以外的模型,按上游 id 原样转发;客户端把点写成横线
+ * (`deepseek-3-2`)也认。上游下架或新增时只改这张表。
+ */
+const OTHER_UPSTREAM_MODELS: readonly string[] = [
+  'auto',
+  'kimi-k3',
+  'deepseek-3.2',
+  'minimax-m2.5',
+  'minimax-m2.1',
+  'glm-5',
+  'qwen3-coder-next',
+];
+
+function mapOtherModel(lower: string): string | undefined {
+  return OTHER_UPSTREAM_MODELS.find((id) => lower === id || lower === id.replaceAll('.', '-'));
+}
 
 /**
  * 已知版本 → 对应 id;没有版本号、或已下线(不高于 `RETIRED_VERSION_CEILING`)→ 家族兜底(最新版本);
@@ -207,6 +231,8 @@ function mapClaudeFamily(lower: string, family: ClaudeFamily): string | undefine
 export function mapModel(model: string): string | undefined {
   const lower = model.toLowerCase();
 
+  const other = mapOtherModel(lower);
+  if (other !== undefined) return other;
   const family = CLAUDE_FAMILIES.find((f) => lower.includes(f.name));
   if (family !== undefined) return mapClaudeFamily(lower, family);
   if (lower.includes('gpt')) {
@@ -228,52 +254,54 @@ export function mapModel(model: string): string | undefined {
 // ============================================================================
 
 /**
- * 走原生 reasoning 的 mapped modelId:请求顶层 `additionalModelRequestFields`
+ * 走原生 reasoning 的 mapped modelId 及其能力:请求顶层 `additionalModelRequestFields`
  * (`buildAdditionalModelRequestFields`)+ 响应 `reasoningContentEvent` + history
- * `reasoningContent`。其它 model 不做 thinking 控制、用上游默认。
+ * `reasoningContent`。表外的 model 不做 thinking 控制、用上游默认。
  *
- * 依据是上游 `ListAvailableModels` 逐模型的 `additionalModelRequestFieldsSchema` 与直打验证:
- *   - opus-5 / 4.7 / 4.8:回摘要 reasoning 帧 + signature;
- *   - sonnet-5:回 signature 帧(文本可能为空),计费随 effort 变;
- *   - sonnet-4.6:schema 无 xhigh,加字段后回明文 reasoning + signature,默认不思考;
- *   - opus-5.5:schema 的 thinking 只有 adaptive(见 `MODELS_THINKING_ALWAYS_ON`),effort 五档、默认 medium,
- *     reasoning 帧同 opus-5;
- *   - sonnet-5.5:schema 的 thinking 是 adaptive / between_tools,同样关不掉(见 `MODELS_THINKING_ALWAYS_ON`),
- *     effort 五档、默认 high;
- *   - haiku-5.5:schema 的 thinking 是 adaptive / disabled,effort 五档、默认 medium,reasoning 帧与签名同 opus-5;
- *   - opus-4.6:发字段只涨计费、既无 reasoning 帧也无 signature,没有可回传的东西,不入集合。
+ * 能力逐项照抄上游 `ListAvailableModels`(origin=KIRO_CLI)逐模型的
+ * `additionalModelRequestFieldsSchema`(2026-10-29 实测):`thinking` = schema 里 `thinking.type`
+ * 的取值,`efforts` / `defaultEffort` = `output_config.effort` 的取值与 default。上游改 schema 时
+ * 只改这张表。
+ *   - opus-5.5 只有 adaptive:思考关不掉。sonnet-5.5 的 schema 是 adaptive / between_tools,但
+ *     between_tools 按 schema 原样发也回 400 REQUEST_BODY_INVALID(2026-10-29 直打,带不带工具、
+ *     带不带 effort 都一样),所以这里只列 adaptive,同样关不掉;
+ *   - 4.6 系没有 xhigh;opus-4.7 默认 xhigh,opus-5.5 / haiku-5.5 默认 medium,其余默认 high。
  *
  * GPT-5.6 走 `additionalModelRequestFields.reasoning.effort`;其 reasoning 不透明(V3 回
  * `{text:"...", signature}`,文本只是占位),不作为 thinking 展示、只经信封回传——见 stream.ts
  * `opaqueReasoning`。
  */
-export const MODELS_WITH_NATIVE_REASONING: ReadonlySet<string> = new Set([
-  'claude-opus-5',
-  'claude-sonnet-5',
-  'claude-opus-4.7',
-  'claude-opus-4.8',
-  'claude-sonnet-4.6',
-  'claude-opus-5.5',
-  'claude-sonnet-5.5',
-  'claude-haiku-5.5',
+interface ClaudeReasoning {
+  readonly thinking: readonly Thinking['type'][];
+  readonly efforts: readonly EffortLevel[];
+  readonly defaultEffort: EffortLevel;
+}
+
+const ALL_EFFORTS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+const NO_XHIGH: readonly EffortLevel[] = ['low', 'medium', 'high', 'max'];
+const SWITCHABLE: readonly Thinking['type'][] = ['adaptive', 'disabled'];
+
+const CLAUDE_REASONING: ReadonlyMap<string, ClaudeReasoning> = new Map([
+  ['claude-opus-5.5', { thinking: ['adaptive'], efforts: ALL_EFFORTS, defaultEffort: 'medium' }],
+  ['claude-sonnet-5.5', { thinking: ['adaptive'], efforts: ALL_EFFORTS, defaultEffort: 'high' }],
+  ['claude-haiku-5.5', { thinking: SWITCHABLE, efforts: ALL_EFFORTS, defaultEffort: 'medium' }],
+  ['claude-opus-5', { thinking: SWITCHABLE, efforts: ALL_EFFORTS, defaultEffort: 'high' }],
+  ['claude-sonnet-5', { thinking: SWITCHABLE, efforts: ALL_EFFORTS, defaultEffort: 'high' }],
+  ['claude-opus-4.8', { thinking: SWITCHABLE, efforts: ALL_EFFORTS, defaultEffort: 'high' }],
+  ['claude-opus-4.7', { thinking: SWITCHABLE, efforts: ALL_EFFORTS, defaultEffort: 'xhigh' }],
+  ['claude-opus-4.6', { thinking: SWITCHABLE, efforts: NO_XHIGH, defaultEffort: 'high' }],
+  ['claude-sonnet-4.6', { thinking: SWITCHABLE, efforts: NO_XHIGH, defaultEffort: 'high' }],
+]);
+
+const GPT_REASONING_MODELS: ReadonlySet<string> = new Set([
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',
 ]);
 
-/** 原生集合里 `output_config.effort` 没有 xhigh 的模型(上游 schema),降到 high。opus-4.6 同样没有但不在原生集合,不列。 */
-const MODELS_WITHOUT_XHIGH: ReadonlySet<string> = new Set(['claude-sonnet-4.6']);
-
-/**
- * thinking 不可关的模型:上游 schema 的 `thinking.type` 没有 disabled,显式 `{type:"disabled"}` 回 400
- * `ValidationException`(2026-09-27 直打 opus-5.5)。客户端发 `disabled` 时按 adaptive 发,而不是把
- * 必 400 的请求送上去;客户端没给 effort 时取 low——Anthropic 文档对这类模型「想关思考」给的替代写法
- * 就是 adaptive + low,按模型默认反而比显式 low 想得更多。客户端的 `between_tools` 已在
- * `normalizeThinking` 归一成 disabled。
- */
-const MODELS_THINKING_ALWAYS_ON: ReadonlySet<string> = new Set([
-  'claude-opus-5.5',
-  'claude-sonnet-5.5',
+export const MODELS_WITH_NATIVE_REASONING: ReadonlySet<string> = new Set([
+  ...CLAUDE_REASONING.keys(),
+  ...GPT_REASONING_MODELS,
 ]);
 
 /** 「是不是 GPT 家族」的唯一判定(入参是 mapped modelId):决定 wire 形态、context window 与加密 reasoning 路径。 */
@@ -281,23 +309,27 @@ export function isGptModelId(mappedModelId: string): boolean {
   return mappedModelId.startsWith('gpt');
 }
 
-/**
- * KAS 在客户端没指定 effort 时发的档位 = 上游 `ListAvailableModels` 逐模型 schema 的 `default`;
- * 只列不是 high 的(2026-09-27 实测)。
- */
-const DEFAULT_EFFORT_BY_MODEL: ReadonlyMap<string, EffortLevel> = new Map([
-  ['claude-opus-4.7', 'xhigh'],
-  ['claude-opus-5.5', 'medium'],
-  ['claude-haiku-5.5', 'medium'],
-]);
-
+/** 客户端没指定 effort 时的档位 = 上游 schema 的 default(KAS 也这样发);表外模型 high。 */
 export function defaultEffort(mappedModelId: string | undefined): EffortLevel {
-  return (mappedModelId ? DEFAULT_EFFORT_BY_MODEL.get(mappedModelId) : undefined) ?? 'high';
+  return (mappedModelId ? CLAUDE_REASONING.get(mappedModelId)?.defaultEffort : undefined) ?? 'high';
 }
 
 /**
- * adaptive 的 effort:取 `output_config.effort`,缺省或未知取值 → 模型默认档位(见 `defaultEffort`)。
- * 只在已确定 adaptive 时调用;`budget_tokens` 不参与。
+ * 旧式 `thinking.budget_tokens`(Cherry Studio 等按预算选档的客户端)→ effort。Kiro wire 没有预算
+ * 字段,只能折成档位;只在客户端没给 `output_config.effort` 时用。
+ */
+export function effortFromBudget(budgetTokens: number | undefined): EffortLevel | undefined {
+  if (budgetTokens === undefined) return undefined;
+  if (budgetTokens <= 4_096) return 'low';
+  if (budgetTokens <= 16_384) return 'medium';
+  if (budgetTokens <= 32_768) return 'high';
+  if (budgetTokens <= 65_536) return 'xhigh';
+  return 'max';
+}
+
+/**
+ * adaptive 的 effort:取 `output_config.effort`,缺省或未知取值 → `fallback`(默认是模型默认档位,
+ * 见 `defaultEffort`)。只在已确定思考开着时调用。
  */
 export function resolveEffort(
   outputConfig: { effort?: string } | undefined,
@@ -312,32 +344,41 @@ function isEffortLevel(s: string): s is EffortLevel {
   return s === 'low' || s === 'medium' || s === 'high' || s === 'xhigh' || s === 'max';
 }
 
+/** 模型不支持的档位落到不高于它的最高档(4.6 的 xhigh → high);没有更低的就取最低档。 */
+function clampEffort(effort: EffortLevel, supported: readonly EffortLevel[]): EffortLevel {
+  if (supported.includes(effort)) return effort;
+  const rank = ALL_EFFORTS.indexOf(effort);
+  const lower = supported.filter((e) => ALL_EFFORTS.indexOf(e) < rank);
+  return lower.at(-1) ?? supported[0] ?? effort;
+}
+
 /** model 是否走原生 reasoning 路径(请求顶层 `additionalModelRequestFields`) */
 export function usesNativeReasoning(mappedModelId: string): boolean {
   return MODELS_WITH_NATIVE_REASONING.has(mappedModelId);
 }
 
 /**
- * 本轮实际生效的 thinking,同 KAS 的默认:原生模型未提 `thinking` 按 `adaptive`;
- * `MODELS_THINKING_ALWAYS_ON` 恒 `adaptive`(客户端 `disabled` 也按 adaptive 发,effort 见
- * `buildAdditionalModelRequestFields`);非原生模型不做
- * thinking 控制,原样返回客户端的值。上游字段(`buildAdditionalModelRequestFields`)与响应侧
- * thinking 通道(`responseThinkingEnabled`)都由它推出,不得各算各的。
+ * 本轮实际生效的 thinking。原生 Claude 模型:未提 `thinking` 按 `adaptive`(同 KAS 的默认);客户端要
+ * `disabled` 而模型关不掉(opus-5.5 / sonnet-5.5)就按 adaptive 发(effort 缺省取 low,见
+ * `buildAdditionalModelRequestFields`)。GPT 与非原生模型不做 thinking 控制,原样返回客户端的值。上游
+ * 字段与响应侧 thinking 通道(`responseThinkingEnabled`)都由它推出,不得各算各的。
  */
 export function effectiveThinking(
   thinking: Thinking | undefined,
   mappedModelId: string,
 ): Thinking | undefined {
-  if (!usesNativeReasoning(mappedModelId)) return thinking;
-  if (MODELS_THINKING_ALWAYS_ON.has(mappedModelId)) return { ...thinking, type: 'adaptive' };
-  return thinking ?? { type: 'adaptive' };
+  const caps = CLAUDE_REASONING.get(mappedModelId);
+  if (!caps)
+    return usesNativeReasoning(mappedModelId) ? (thinking ?? { type: 'adaptive' }) : thinking;
+  const wanted = thinking?.type ?? 'adaptive';
+  return { ...thinking, type: caps.thinking.includes(wanted) ? wanted : 'adaptive' };
 }
 
 /**
  * 响应侧是否开 thinking 通道(`StreamContext` / `reduceKiroResponse` 的 `thinkingEnabled`):本轮实际
- * 生效 adaptive 才开。Claude 原生 reasoning 必须为 true,否则 `generateInitialEvents` 先开 text
- * block,thinking block 被挤到其后。GPT 推理不透明、不走 thinking 通道,恒 false——从响应开始就
- * 关掉 legacy `<thinking>` 解码,推理 event 缺失 / 晚到时也不会误解可见输出里的字面标签。
+ * 生效 adaptive 才开。Claude 原生 reasoning 必须为 true,否则 `generateInitialEvents` 先开 text block,
+ * thinking block 被挤到其后。GPT 推理不透明、不走 thinking 通道,恒 false——从响应开始就关掉 legacy
+ * `<thinking>` 解码,推理 event 缺失 / 晚到时也不会误解可见输出里的字面标签。
  */
 export function responseThinkingEnabled(
   thinking: Thinking | undefined,
@@ -353,9 +394,9 @@ export function responseThinkingEnabled(
  * 形状见 `requests/kiro.ts`),按 `effectiveThinking`:
  *   - 非原生模型 → undefined(不发,沿用上游默认);
  *   - `disabled` → Claude `{thinking:{type:"disabled"}}` / GPT `{reasoning:{effort:"none"}}`;
- *   - `adaptive`(含未提时的默认)→ Claude `{thinking:{type:"adaptive", display?},
- *     output_config:{effort}}` / GPT `{reasoning:{effort}}`;sonnet-4.6 无 xhigh → 降 high;
- *     `MODELS_THINKING_ALWAYS_ON` 收到 `disabled` 时 effort 缺省取 low。
+ *   - `adaptive` → Claude `{thinking:{type:"adaptive", display?}, output_config:{effort}}` /
+ *     GPT `{reasoning:{effort}}`。effort 依次取 `output_config.effort`、`budget_tokens` 折算、
+ *     客户端想关却关不掉时的 low、模型默认档位,再落到模型支持的档位内。
  */
 export function buildAdditionalModelRequestFields(
   req: Pick<MessagesRequest, 'thinking' | 'output_config'>,
@@ -364,20 +405,18 @@ export function buildAdditionalModelRequestFields(
   if (!usesNativeReasoning(mappedModelId)) return undefined;
   const thinking = effectiveThinking(req.thinking, mappedModelId);
   const isGpt = isGptModelId(mappedModelId);
-  if (thinking?.type !== 'adaptive') {
+  if (thinking === undefined || thinking.type === 'disabled') {
     return isGpt ? { reasoning: { effort: 'none' } } : { thinking: { type: 'disabled' } };
   }
-  // 走到这里还是 disabled,只可能是常开模型被 effectiveThinking 改成了 adaptive
-  const effort = resolveEffort(
-    req.output_config,
-    mappedModelId,
-    req.thinking?.type === 'disabled' ? 'low' : undefined,
-  );
+  const fallback =
+    effortFromBudget(req.thinking?.budgetTokens) ??
+    (req.thinking?.type === 'disabled' ? 'low' : defaultEffort(mappedModelId));
+  const effort = resolveEffort(req.output_config, mappedModelId, fallback);
   if (isGpt) return { reasoning: { effort } };
-  const clamped = effort === 'xhigh' && MODELS_WITHOUT_XHIGH.has(mappedModelId) ? 'high' : effort;
+  const caps = CLAUDE_REASONING.get(mappedModelId);
   return {
-    thinking: { type: 'adaptive', ...(thinking.display ? { display: thinking.display } : {}) },
-    output_config: { effort: clamped },
+    thinking: { type: thinking.type, ...(thinking.display ? { display: thinking.display } : {}) },
+    output_config: { effort: caps ? clampEffort(effort, caps.efforts) : effort },
   };
 }
 
@@ -401,11 +440,22 @@ export function clientModelHasEncryptedReasoning(clientModel: string): boolean {
   return mapped !== undefined && isGptModelId(mapped);
 }
 
+/** 不是 1M 窗口的上游模型(`ListAvailableModels` 的 tokenLimits.maxInputTokens,2026-10-29 实测)。 */
+const CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
+  ['claude-opus-4.5', 200_000],
+  ['claude-sonnet-4.5', 200_000],
+  ['claude-haiku-4.5', 200_000],
+  ['deepseek-3.2', 164_000],
+  ['minimax-m2.5', 196_000],
+  ['minimax-m2.1', 196_000],
+  ['glm-5', 200_000],
+  ['qwen3-coder-next', 256_000],
+]);
+
 /**
  * Get context window size for a model.
  *
- * Kiro 上的 Claude 模型都是 1M 窗口(上游 `ListAvailableModels` 的 tokenLimits.maxInputTokens);将来出现
- * 非 1M 的 Claude 模型时再按模型分表。GPT-5.6 系列的分母随上游漂移、逐账号灰度:默认
+ * 上游大多数模型是 1M 窗口,例外见 `CONTEXT_WINDOWS`。GPT-5.6 系列的分母随上游漂移、逐账号灰度:默认
  * `DEFAULT_GPT_CONTEXT_WINDOW`,可由 `KIRO2CLAUDE_GPT_CONTEXT_WINDOW` 覆盖。认不出的模型走 200K。
  *
  * ★ 返回值是 `resolveContextUsage` 反推 input_tokens 的**乘数**——上游改窗口不报错、
@@ -414,7 +464,8 @@ export function clientModelHasEncryptedReasoning(clientModel: string): boolean {
 export function getContextWindowSize(model: string): number {
   const mapped = mapModel(model);
   if (mapped === undefined) return 200_000;
-  return isGptModelId(mapped) ? _gptContextWindow : 1_000_000;
+  if (isGptModelId(mapped)) return _gptContextWindow;
+  return CONTEXT_WINDOWS.get(mapped) ?? 1_000_000;
 }
 
 let _gptContextWindow = DEFAULT_GPT_CONTEXT_WINDOW;

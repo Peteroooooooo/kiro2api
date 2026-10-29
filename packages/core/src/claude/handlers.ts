@@ -3,7 +3,6 @@
  * specialized modules:
  *
  *   - `models-catalog.ts`       — static model list
- *   - `request-validator.ts`    — model-name thinking override
  *   - `error-mapper.ts`         — provider error → HTTP reply
  *   - `stream-handler.ts`       — SSE streaming path
  *   - `non-stream-handler.ts`   — non-streaming collector
@@ -28,7 +27,6 @@ import { captureEmptyRequest, type MessageHandlerResult } from './empty-capture.
 import { mapConversionError } from './error-mapper.js';
 import { getModelsResponse } from './models-catalog.js';
 import { handleNonStreamRequest } from './non-stream-handler.js';
-import { overrideThinkingFromModelName } from './request-validator.js';
 import {
   countTokensRequestSchema,
   formatRequestError,
@@ -79,8 +77,8 @@ export function createPostMessages(deps: PostMessagesDeps) {
     const log = getLogger();
 
     // Runtime-validate the request body via zod. The schema transform also
-    // normalizes `system` (string → [{text}]) and `thinking` (type + display only;
-    // budget_tokens is not supported and dropped).
+    // normalizes `system` (string → [{text}]) and `thinking` (type, display and
+    // budget_tokens; the budget only ever becomes an effort level).
     const parseResult = messagesRequestSchema.safeParse(request.body);
     if (!parseResult.success) {
       const errorMessage = formatRequestError(parseResult.error);
@@ -105,9 +103,6 @@ export function createPostMessages(deps: PostMessagesDeps) {
     log.info({ msg: 'POST /claude/v1/messages', model: payload.model, ...requestMeta });
 
     const provider = deps.kiroProvider;
-
-    // Override thinking from model name
-    overrideThinkingFromModelName(payload);
 
     // Check for WebSearch request
     if (hasWebSearchTool(payload)) {

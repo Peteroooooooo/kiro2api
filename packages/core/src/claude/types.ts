@@ -32,12 +32,16 @@ export interface ModelsResponse {
 // === Messages endpoint types ===
 
 /**
- * Thinking 配置,只有 adaptive 语义:effort 由 `output_config.effort` 决定(缺省 high);客户端的
- * `enabled` 在 `normalizeThinking` 归一成 `adaptive`,`budget_tokens` 丢弃(Kiro wire 没有预算
- * 字段)。`type` 只有两个值,下游不必各自判断。
+ * Thinking 配置,只有 adaptive / disabled 两种:effort 由 `output_config.effort` 决定;客户端的
+ * `enabled` 在 `normalizeThinking` 归一成 `adaptive`。`type` 只有两个值,下游不必各自判断。
  */
 export interface Thinking {
   type: 'adaptive' | 'disabled';
+  /**
+   * 旧式 `budget_tokens`。Kiro wire 没有预算字段,只在客户端没给 `output_config.effort` 时折成
+   * effort(`effortFromBudget`)。
+   */
+  budgetTokens?: number;
   /**
    * Anthropic `thinking.display`(Claude Code 2.1.278 起发 `omitted`):`omitted` = 不回
    * 思考文本、只回可回传的签名。上游 Kiro 的模型 schema 有同名同值字段,原样透传。
@@ -98,18 +102,29 @@ export function preprocessSystem(raw: unknown): SystemMessage[] | undefined {
 
 /**
  * 把客户端的 `thinking` 收窄成网关认的形状:`enabled` / `adaptive` → `adaptive`,`disabled` 原样,
- * `between_tools`(Anthropic 在 sonnet-5.5 上关思考的写法)→ `disabled`,其它视为未提;只留 `display`,
- * 丢掉其它字段(含 `budget_tokens`)。
+ * `between_tools`(Anthropic 在 sonnet-5.5 上关思考的写法;上游 Kiro 的 schema 虽列了它,实发回 400)
+ * → `disabled`,其它视为未提;只留 `display` 和正整数的 `budget_tokens`。
  */
 export function normalizeThinking(raw: unknown): Thinking | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
-  const { type, display } = raw as { type?: unknown; display?: unknown };
+  const { type, display, budget_tokens } = raw as {
+    type?: unknown;
+    display?: unknown;
+    budget_tokens?: unknown;
+  };
   let normalized: Thinking['type'];
   if (type === 'enabled' || type === 'adaptive') normalized = 'adaptive';
   else if (type === 'disabled' || type === 'between_tools') normalized = 'disabled';
   else return undefined;
   const out: Thinking = { type: normalized };
   if (display === 'summarized' || display === 'omitted') out.display = display;
+  if (
+    normalized === 'adaptive' &&
+    Number.isInteger(budget_tokens) &&
+    (budget_tokens as number) > 0
+  ) {
+    out.budgetTokens = budget_tokens as number;
+  }
   return out;
 }
 
