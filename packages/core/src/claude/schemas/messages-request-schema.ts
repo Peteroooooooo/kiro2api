@@ -24,8 +24,8 @@
  *
  * `preprocessSystem` and `normalizeThinking` are imported from `types.ts`
  * so the schema and every consumer see identical `system` and `thinking`
- * shapes (`thinking` keeps only `type` + `display`; `budget_tokens` is dropped —
- * only adaptive semantics are supported).
+ * shapes (`thinking` keeps `type`, `display` and a positive `budget_tokens`,
+ * which is only ever folded into an effort level).
  */
 
 import { z } from 'zod';

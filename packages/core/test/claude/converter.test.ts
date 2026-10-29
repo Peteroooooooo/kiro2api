@@ -129,17 +129,20 @@ describe('mapModel', () => {
   });
 
   it('test_map_model_legacy_names_fall_back_to_newest', () => {
-    // 没有版本号或已下线(4.5 及更老)的写法走家族兜底,兜底是家族最新版本
+    // 没有版本号或已下线(4.1 及更老)的写法走家族兜底,兜底是家族最新版本
     expect(mapModel('claude-3-opus-20240229')).toBe('claude-opus-5.5');
     expect(mapModel('claude-opus-4-1-20250805')).toBe('claude-opus-5.5');
-    expect(mapModel('claude-opus-4-5-20251101-thinking')).toBe('claude-opus-5.5');
     expect(mapModel('gpt-opus')).toBe('claude-opus-5.5');
     expect(mapModel('claude-3-7-sonnet-20250219')).toBe('claude-sonnet-5.5');
-    expect(mapModel('claude-sonnet-4-5-20250929')).toBe('claude-sonnet-5.5');
     expect(mapModel('claude-sonnet')).toBe('claude-sonnet-5.5');
     expect(mapModel('claude-3-5-haiku-20241022')).toBe('claude-haiku-5.5');
-    expect(mapModel('claude-haiku-4-5-20251001')).toBe('claude-haiku-5.5');
-    expect(mapModel('claude-haiku-4-5-20251001-thinking')).toBe('claude-haiku-5.5');
+  });
+
+  it('test_map_model_claude_4_5_is_still_upstream', () => {
+    expect(mapModel('claude-opus-4-5-20251101-thinking')).toBe('claude-opus-4.5');
+    expect(mapModel('claude-sonnet-4-5-20250929')).toBe('claude-sonnet-4.5');
+    expect(mapModel('claude-haiku-4-5-20251001')).toBe('claude-haiku-4.5');
+    expect(mapModel('claude-haiku-4.5')).toBe('claude-haiku-4.5');
   });
 
   it('test_map_model_other_spellings', () => {
@@ -196,10 +199,19 @@ describe('mapModel', () => {
     expect(mapModel('claude-fable-5-1-thinking')).toBeUndefined();
   });
 
-  it('test_map_model_glm_no_longer_supported', () => {
-    expect(mapModel('glm-5')).toBeUndefined();
-    expect(mapModel('GLM-5')).toBeUndefined();
+  it('test_map_model_other_upstream_models', () => {
+    // 上游 id 原样;点写成横线、大小写不同也认;只认完整 id
+    expect(mapModel('glm-5')).toBe('glm-5');
+    expect(mapModel('GLM-5')).toBe('glm-5');
+    expect(mapModel('deepseek-3.2')).toBe('deepseek-3.2');
+    expect(mapModel('deepseek-3-2')).toBe('deepseek-3.2');
+    expect(mapModel('minimax-m2-5')).toBe('minimax-m2.5');
+    expect(mapModel('kimi-k3')).toBe('kimi-k3');
+    expect(mapModel('qwen3-coder-next')).toBe('qwen3-coder-next');
+    expect(mapModel('auto')).toBe('auto');
     expect(mapModel('glm')).toBeUndefined();
+    expect(mapModel('deepseek')).toBeUndefined();
+    expect(mapModel('auto-thinking')).toBeUndefined();
   });
 
   it('test_map_model_gpt_5_6', () => {
@@ -1379,13 +1391,14 @@ describe('convertRequest - identity override', () => {
 });
 
 describe('convertRequest - non-native models get no thinking control at all', () => {
-  // baseRequest 的 claude-opus-4-6 非原生 reasoning:thinking / effort 对它无效(不发字段、
-  // 不注入提示词前缀),请求原样上送、走上游默认。
+  // claude-opus-4-5 非原生 reasoning(上游 schema 没有 thinking 字段):thinking / effort 对它无效
+  // (不发字段、不注入提示词前缀),请求原样上送、走上游默认。
   const thinking = { type: 'adaptive' as const };
+  const model = 'claude-opus-4-5';
 
   it('thinking (no system): user text is sent untouched, no prefix, no top-level fields', () => {
     const result = convertRequest(
-      baseRequest({ messages: [{ role: 'user', content: 'hello' }], thinking }),
+      baseRequest({ model, messages: [{ role: 'user', content: 'hello' }], thinking }),
     );
     expect(result.conversationState.history).toHaveLength(0);
     expect(result.conversationState.currentMessage.userInputMessage.content).toBe('hello');
@@ -1395,6 +1408,7 @@ describe('convertRequest - non-native models get no thinking control at all', ()
   it('thinking + system: system, then the user text — nothing else', () => {
     const result = convertRequest(
       baseRequest({
+        model,
         system: [{ type: 'text', text: 'Be brief.' }],
         messages: [{ role: 'user', content: 'hello' }],
         thinking,

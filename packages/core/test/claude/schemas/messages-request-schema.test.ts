@@ -141,22 +141,26 @@ describe('messagesRequestSchema - thinking normalization (adaptive only)', () =>
       thinking,
     });
 
-  it('enabled → adaptive, budget_tokens dropped: only type (+ display) survive', () => {
-    const result = parse({ type: 'enabled', budget_tokens: 100000 });
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.data.thinking).toEqual({ type: 'adaptive' });
-  });
-
-  it('keeps adaptive + display as-is', () => {
-    const result = parse({ type: 'adaptive', display: 'omitted', budget_tokens: 5 });
+  it('enabled → adaptive; budget_tokens kept for the effort fallback, other fields dropped', () => {
+    const result = parse({ type: 'enabled', budget_tokens: 100000, extra: 1 });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.thinking).toEqual({ type: 'adaptive', display: 'omitted' });
+      expect(result.data.thinking).toEqual({ type: 'adaptive', budgetTokens: 100000 });
     }
   });
 
-  it('between_tools (sonnet-5.5 thinking-off) → disabled, never reaches the wire', () => {
-    const result = parse({ type: 'between_tools' });
+  it('keeps adaptive + display as-is; a non-positive or fractional budget is ignored', () => {
+    for (const budget_tokens of [0, -5, 1.5, '4096']) {
+      const result = parse({ type: 'adaptive', display: 'omitted', budget_tokens });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.thinking).toEqual({ type: 'adaptive', display: 'omitted' });
+      }
+    }
+  });
+
+  it('between_tools (sonnet-5.5 thinking-off) → disabled, never reaches the wire; its budget is dropped', () => {
+    const result = parse({ type: 'between_tools', budget_tokens: 2048 });
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.thinking).toEqual({ type: 'disabled' });
   });
