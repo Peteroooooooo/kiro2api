@@ -12,6 +12,13 @@ export interface Config {
   countTokensAuthType: string;
   sqliteDbPath?: string;
   /**
+   * Admin key for `/admin` (account pool panel). Setting it, or `accountsFile`,
+   * turns on pool mode; the SQLite credential then becomes optional.
+   */
+  adminKey?: string;
+  /** JSON file holding pool accounts. Defaults to `accounts.json` in the working directory. */
+  accountsFile?: string;
+  /**
    * 上游偶发返回「200 OK + 零内容帧」的空流(silent failure)。pre-commit 阶段
    * 检测到后,网关对同一请求最多重发这么多次来透明吸收瞬时空流。默认 2;
    * 0 = 关闭重试(立即回 503 overloaded_error,纯转发行为)。

@@ -34,6 +34,8 @@ function makeProvider(status: number, body: string): KiroProvider {
       token: 'tok',
     }),
     forceRefreshToken: async () => 'tok',
+    failoverCapacity: () => 1,
+    reportOutcome: () => {},
   } as unknown as SingleTokenManager;
   const provider = new KiroProvider(tokenManager);
   const client = (provider as unknown as { client: { post: unknown } }).client;

@@ -2,9 +2,10 @@
 # ============================================================================
 # 构建约定
 # ----------------------------------------------------------------------------
-# - 本 Dockerfile 只针对 linux/amd64：官方 kiro-cli 有 arm64 发行版，但
-#   我们当前只锁定一个架构，避免多架构 manifest 的复杂度。如果要切换到
-#   arm64，把 KIRO2CLAUDE_CLI_ARCHIVE 和 FROM 里的 --platform 一起改掉就好。
+# - 架构跟随构建平台（linux/amd64 或 linux/arm64）：kiro-cli 包按 TARGETARCH
+#   自动选 x86_64 / aarch64。在 arm64 机器上直接 build 即得 arm64 镜像；
+#   跨架构用 `docker buildx build --platform linux/arm64`。arm64 用 musl 包：
+#   aarch64 的 glibc 包要求 glibc >= 2.39，bookworm 只有 2.36，install.sh 会拒装。
 # - kiro-cli 版本的「唯一真相源」是 fixtures/kiro-cli-profile.json 的
 #   kiroCliVersion 字段。`ARG KIRO2CLAUDE_CLI_VERSION` 故意**没有**默认值——
 #   build 时必须由外部提供，确保版本号永远派生自 fixture，不可能漂移。
@@ -24,8 +25,8 @@
 #     4) git add fixtures/ && git commit
 # ============================================================================
 ARG KIRO2CLAUDE_CLI_VERSION
-ARG KIRO2CLAUDE_CLI_ARCHIVE=kirocli-x86_64-linux.zip
-ARG KIRO2CLAUDE_CLI_URL=https://prod.download.cli.kiro.dev/stable/${KIRO2CLAUDE_CLI_VERSION}/${KIRO2CLAUDE_CLI_ARCHIVE}
+# 留空 = 按目标架构自动选（amd64 → x86_64，arm64 → aarch64）；也可显式覆盖。
+ARG KIRO2CLAUDE_CLI_ARCHIVE=
 
 
 # ============================================================================
@@ -36,11 +37,11 @@ ARG KIRO2CLAUDE_CLI_URL=https://prod.download.cli.kiro.dev/stable/${KIRO2CLAUDE_
 # - 校验逻辑集中在这里，后续 stage 只需要 COPY 过去就行
 # - 版本校验失败时 RUN 指令立即退出，错误信息直接体现在 docker build 输出里
 # ============================================================================
-FROM --platform=linux/amd64 debian:bookworm-slim AS kiro-cli-fetcher
+FROM debian:bookworm-slim AS kiro-cli-fetcher
 
 ARG KIRO2CLAUDE_CLI_VERSION
 ARG KIRO2CLAUDE_CLI_ARCHIVE
-ARG KIRO2CLAUDE_CLI_URL
+ARG TARGETARCH
 
 # 早期校验：KIRO2CLAUDE_CLI_VERSION 必须非空。如果为空，URL 会变成
 # `stable//kirocli-...`，curl 拿到 403 但错误信息不直观——这里 fail-fast
@@ -83,7 +84,15 @@ WORKDIR /opt/kiro-cli-src
 #   build 环境里，用 `|| true` 吃掉这个非零退出，再显式断言
 #   /opt/kiro-cli/.local/bin/kiro-cli 存在且可执行作为真正的成败判据
 RUN set -eux; \
-    curl --proto '=https' --tlsv1.2 -fsSL -o kiro-cli.zip "${KIRO2CLAUDE_CLI_URL}"; \
+    archive="${KIRO2CLAUDE_CLI_ARCHIVE}"; \
+    if [ -z "${archive}" ]; then \
+      case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+        amd64) archive=kirocli-x86_64-linux.zip ;; \
+        arm64) archive=kirocli-aarch64-linux-musl.zip ;; \
+        *) echo "ERROR: 不支持的架构 ${TARGETARCH:-unknown}（kiro-cli 只发布 x86_64 / aarch64）" >&2; exit 1 ;; \
+      esac; \
+    fi; \
+    curl --proto '=https' --tlsv1.2 -fsSL -o kiro-cli.zip "https://prod.download.cli.kiro.dev/stable/${KIRO2CLAUDE_CLI_VERSION}/${archive}"; \
     unzip -q kiro-cli.zip; \
     test -f ./kirocli/install.sh || { echo "ERROR: 解压后没找到 kirocli/install.sh，zip 布局可能变了" >&2; ls -la; exit 1; }; \
     mkdir -p /opt/kiro-cli; \
@@ -141,7 +150,7 @@ RUN set -eux; \
 # 安装编译工具链编译 better-sqlite3 原生模块，安装依赖并编译 TypeScript。
 # 顺便校验 fixtures/kiro-cli-profile.json 的 kiroCliVersion 与 ARG 一致。
 # ============================================================================
-FROM --platform=linux/amd64 node:22-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS builder
 
 ARG KIRO2CLAUDE_CLI_VERSION
 
@@ -207,7 +216,7 @@ RUN pnpm --filter '@kiro2claude/core' deploy --prod --legacy /deploy
 # 仅包含运行所需的 node_modules + 编译产物 + kiro-cli 二进制 + fixture。
 # 不带任何编译工具链。
 # ============================================================================
-FROM --platform=linux/amd64 node:22-bookworm-slim AS runtime
+FROM node:22-bookworm-slim AS runtime
 
 ARG KIRO2CLAUDE_CLI_VERSION
 # org.opencontainers.image.source 让 ghcr 自动把 package 关联到本 repo:

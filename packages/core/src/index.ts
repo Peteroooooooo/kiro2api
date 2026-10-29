@@ -23,9 +23,14 @@ import { verifyInstalledKiroCliVersion } from './kiro/cli-version.js';
 import { loadCredentialsFromEnv } from './kiro/credentials-loader.js';
 import { KiroProvider } from './kiro/provider.js';
 import { SingleTokenManager } from './kiro/token-manager.js';
+import type { TokenSource } from './kiro/token-source.js';
 import { loadConfigFromEnv } from './model/config.js';
 import { DEFAULT_GPT_CONTEXT_WINDOW } from './model/schemas/config-schema.js';
 import { CapabilityRegistry, discoverPlugins, HookBus } from './plugin-host/index.js';
+import { AccountPool } from './pool/account-pool.js';
+import { AccountStore } from './pool/account-store.js';
+import { DeviceLoginManager } from './pool/device-login.js';
+import { registerAdminRoutes } from './routes/admin.js';
 import { registerClaudeRoutes } from './routes/claude.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerKiroRoutes } from './routes/kiro.js';
@@ -104,21 +109,40 @@ async function main(): Promise<void> {
     logger.info(`bootstrap-login: ${bootstrap.message}`);
   }
 
-  // 2. 加载 kiro-cli SQLite 凭据
-  let loaded: ReturnType<typeof loadCredentialsFromEnv>;
-  try {
-    loaded = loadCredentialsFromEnv();
-  } catch (e) {
-    logger.error(`加载凭据失败: ${(e as Error).message}`);
-    process.exit(1);
+  // 2. 加载 kiro-cli SQLite 凭据。号池模式下 SQLite 可选：没有就只用 accounts.json 里的账号。
+  const poolMode = Boolean(config.adminKey || config.accountsFile);
+  let loaded: ReturnType<typeof loadCredentialsFromEnv> | undefined;
+  if (!poolMode || config.sqliteDbPath) {
+    try {
+      loaded = loadCredentialsFromEnv();
+    } catch (e) {
+      if (!poolMode) {
+        logger.error(`加载凭据失败: ${(e as Error).message}`);
+        process.exit(1);
+      }
+      logger.warn(
+        `号池模式：kiro-cli SQLite 凭据未加载，只使用 accounts 文件中的账号: ${(e as Error).message}`,
+      );
+    }
   }
 
   const apiKey = config.apiKey;
 
-  // 3. 构建 SingleTokenManager 和 KiroProvider
-  let tokenManager: SingleTokenManager;
+  // 3. 构建 token 来源（单凭据 SingleTokenManager 或号池 AccountPool）和 KiroProvider
+  let tokenManager: TokenSource;
+  let pool: AccountPool | undefined;
   try {
-    tokenManager = new SingleTokenManager(config, loaded.credentials, loaded.source);
+    if (poolMode) {
+      const store = new AccountStore(config.accountsFile ?? 'accounts.json');
+      store.load();
+      pool = new AccountPool(config, store, loaded);
+      tokenManager = pool;
+      logger.info(`号池模式：${pool.list().length} 个账号，accounts 文件 ${store.filePath}`);
+    } else if (loaded) {
+      tokenManager = new SingleTokenManager(config, loaded.credentials, loaded.source);
+    } else {
+      throw new Error('no credential source');
+    }
   } catch (e) {
     logger.error(`创建 Token 管理器失败: ${(e as Error).message}`);
     process.exit(1);
@@ -200,8 +224,14 @@ async function main(): Promise<void> {
   // 时刻"暴露，便于运维诊断。失败不硬挂（log warn）——后续请求仍会走 lazy
   // refresh 路径，给故障恢复留出窗口。
   try {
-    await tokenManager.acquireContext();
-    logger.info('启动自检完成：凭据就绪');
+    if (pool) {
+      await pool.warmup();
+      const usable = pool.list().filter((a) => a.status === 'ok').length;
+      logger.info(`启动自检完成：号池 ${usable}/${pool.list().length} 个账号可用`);
+    } else {
+      await tokenManager.acquireContext();
+      logger.info('启动自检完成：凭据就绪');
+    }
   } catch (e) {
     logger.warn(
       `启动自检未能获取可用凭据：${(e as Error).message}。将依赖请求到来时的 lazy refresh。`,
@@ -217,6 +247,8 @@ async function main(): Promise<void> {
   // 取，避免直接依赖 SingleTokenManager 这个 kiro-specific 类。
   const usageLimitsProvider: UsageLimitsProvider = {
     async getUsageLimits() {
+      // 号池：各账号最近一次查询到的额度之和（加上之后累计的 credits），不逐个打上游。
+      if (pool) return pool.aggregateQuota();
       const raw = await tokenManager.getUsageLimits();
       const breakdown = raw.usageBreakdownList?.[0];
       const limit = breakdown?.usageLimitWithPrecision ?? breakdown?.usageLimit ?? 0;
@@ -225,6 +257,16 @@ async function main(): Promise<void> {
     },
   };
   capabilities.register('usage-limits', usageLimitsProvider);
+
+  // 号池：把每个请求的上游 credits 记到实际服务它的账号上。
+  if (pool) {
+    const accountPool = pool;
+    hookBus.registerUsageFinish('core:account-pool', (event) => {
+      const accountId = getRequestContext()?.accountId;
+      const credits = event.getMeta<number>('kiro.creditsUsed');
+      if (accountId && typeof credits === 'number') accountPool.recordCredits(accountId, credits);
+    });
+  }
 
   // 5. 初始化 count_tokens 配置
   initCountTokensConfig({
@@ -353,6 +395,23 @@ async function main(): Promise<void> {
     },
     { prefix: '/kiro' },
   );
+
+  if (pool && config.adminKey) {
+    const adminDeps = {
+      adminKey: config.adminKey,
+      apiKey,
+      pool,
+      logins: new DeviceLoginManager(pool),
+    };
+    await app.register(
+      async (instance) => {
+        await registerAdminRoutes(instance, adminDeps);
+      },
+      { prefix: '/admin' },
+    );
+  } else if (pool) {
+    logger.warn('号池模式未设置 KIRO2CLAUDE_ADMIN_KEY：/admin 管理页不启用');
+  }
 
   // 8. Plugin discovery + registration.
   //

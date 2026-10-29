@@ -10,7 +10,8 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { KiroHttpError, type SingleTokenManager } from '../kiro/token-manager.js';
+import { KiroHttpError } from '../kiro/token-manager.js';
+import type { TokenSource } from '../kiro/token-source.js';
 import { createApiKeyAuthHook } from '../shared/auth-hook.js';
 import { createErrorResponse } from '../shared/errors.js';
 import { getLogger } from '../shared/logger.js';
@@ -19,7 +20,7 @@ export interface KiroRoutesDeps {
   /** API key used to authenticate incoming requests */
   apiKey: string;
   /** Token manager used to call the upstream `getUsageLimits` API */
-  tokenManager: SingleTokenManager;
+  tokenManager: TokenSource;
 }
 
 export async function registerKiroRoutes(

@@ -30,6 +30,7 @@ import {
   type SqliteCredentialSource,
   saveToSqlite,
 } from './sqlite-credentials.js';
+import type { AcquireOptions, CallContext, TokenSource } from './token-source.js';
 
 // ---------------------------------------------------------------------------
 // Token 过期判定辅助函数
@@ -353,16 +354,42 @@ class AsyncMutex {
 }
 
 // ============================================================================
+// Credential persistence
+// ============================================================================
+
+/**
+ * Where a refreshed credential is written back, and where a newer one is
+ * re-read from after a refresh failure. SQLite (kiro-cli's own database) for
+ * the single-credential mode, the pool's JSON store for pool accounts.
+ */
+export interface CredentialPersistence {
+  save(credentials: KiroCredentials): void;
+  reload(): { credentials: KiroCredentials; persistence: CredentialPersistence } | undefined;
+}
+
+export function sqlitePersistence(source: SqliteCredentialSource): CredentialPersistence {
+  return {
+    save: (credentials) => saveToSqlite(source, credentials),
+    reload: () => {
+      const result = reloadFromSqlite(source);
+      return (
+        result && { credentials: result.credentials, persistence: sqlitePersistence(result.source) }
+      );
+    },
+  };
+}
+
+function isCredentialPersistence(
+  x: SqliteCredentialSource | CredentialPersistence,
+): x is CredentialPersistence {
+  return typeof (x as CredentialPersistence).save === 'function';
+}
+
+// ============================================================================
 // SingleTokenManager
 // ============================================================================
 
-/** 一次 API 调用的上下文，绑定一对 credential + access token */
-export interface CallContext {
-  /** 凭据信息（用于构造请求头） */
-  credentials: KiroCredentials;
-  /** access token */
-  token: string;
-}
+export type { CallContext } from './token-source.js';
 
 /**
  * 单凭据 Token 管理器。
@@ -370,17 +397,22 @@ export interface CallContext {
  * 职责被刻意收窄到「一个 kiro-cli 凭据的生命周期」：过期时 lazy refresh、
  * 通过 `AsyncMutex` 双检锁避免并发刷新、刷新成功后把新凭据写回原 SQLite
  * 库（保持和 kiro-cli 的字段完全兼容，kiro-cli 下次启动能直接用）。
+ * Pool accounts reuse the same lifecycle with a JSON-store persistence.
  */
-export class SingleTokenManager {
+export class SingleTokenManager implements TokenSource {
   private _config: Config;
   private _credentials: KiroCredentials;
-  private _source: SqliteCredentialSource;
+  private _source: CredentialPersistence;
   private _refreshLock: AsyncMutex;
 
-  constructor(config: Config, credentials: KiroCredentials, source: SqliteCredentialSource) {
+  constructor(
+    config: Config,
+    credentials: KiroCredentials,
+    source: SqliteCredentialSource | CredentialPersistence,
+  ) {
     this._config = config;
     this._credentials = { ...credentials };
-    this._source = source;
+    this._source = isCredentialPersistence(source) ? source : sqlitePersistence(source);
     this._refreshLock = new AsyncMutex();
   }
 
@@ -389,13 +421,25 @@ export class SingleTokenManager {
     return this._config;
   }
 
+  /** Current credential (a copy), for display and persistence. */
+  credentials(): KiroCredentials {
+    return { ...this._credentials };
+  }
+
+  failoverCapacity(): number {
+    return 1;
+  }
+
+  reportOutcome(): void {}
+
   /**
    * 获取一次 API 调用的上下文。
    *
    * 如果 token 已过期或即将过期，会触发一次 lazy refresh；通过
-   * AsyncMutex 双检锁避免并发场景下的重复刷新。
+   * AsyncMutex 双检锁避免并发场景下的重复刷新。Pool options are ignored:
+   * there is only one credential.
    */
-  async acquireContext(): Promise<CallContext> {
+  async acquireContext(_opts?: AcquireOptions): Promise<CallContext> {
     const log = getLogger();
     const needsRefresh =
       isTokenExpired(this._credentials) || isTokenExpiringSoon(this._credentials);
@@ -429,7 +473,7 @@ export class SingleTokenManager {
   /**
    * 无条件强制刷新 Token（provider 在 401 路径下调用）。
    */
-  async forceRefreshToken(): Promise<void> {
+  async forceRefreshToken(_accountId?: string): Promise<void> {
     const log = getLogger();
     const start = Date.now();
     // Snapshot the bearer we're about to invalidate BEFORE queuing on the lock.
@@ -477,7 +521,7 @@ export class SingleTokenManager {
    */
   private async doRefresh(): Promise<void> {
     let newCreds: KiroCredentials;
-    let newSource = this._source;
+    let newSource: CredentialPersistence = this._source;
     try {
       newCreds = await refreshToken(this._credentials, this._config);
     } catch (e: unknown) {
@@ -520,8 +564,9 @@ export class SingleTokenManager {
   /** 从 SQLite 重读一次；返回候选凭据，由 doRefresh 验证后统一提交。 */
   private async reloadAndRetryRefresh(
     originalError: unknown,
-  ): Promise<{ credentials: KiroCredentials; source: SqliteCredentialSource }> {
-    const result = reloadFromSqlite(this._source);
+  ): Promise<{ credentials: KiroCredentials; source: CredentialPersistence }> {
+    const reloaded = this._source.reload();
+    const result = reloaded && { credentials: reloaded.credentials, source: reloaded.persistence };
     if (!result) {
       if (originalError instanceof RefreshTokenInvalidError) throw originalError;
       throw new Error('SQLite reload found no credentials');
@@ -562,8 +607,8 @@ export class SingleTokenManager {
    */
   private persistRefreshedCredentials(): void {
     try {
-      saveToSqlite(this._source, this._credentials);
-      logger.debug('Credentials written back to SQLite');
+      this._source.save(this._credentials);
+      logger.debug('Credentials written back to persistence');
     } catch (e) {
       logger.warn({ msg: 'credential write-back failed', error: String(e) });
     }

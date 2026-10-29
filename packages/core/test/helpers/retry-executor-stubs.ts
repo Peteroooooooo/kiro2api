@@ -17,6 +17,8 @@ export function makeStubTokenManager(): SingleTokenManager {
       token: 'stub-token',
     })),
     forceRefreshToken: vi.fn(async () => {}),
+    failoverCapacity: () => 1,
+    reportOutcome: () => {},
   } as unknown as SingleTokenManager;
 }
 

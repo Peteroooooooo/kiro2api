@@ -59,6 +59,8 @@ function makeExecutor(statuses: number[], bodies: string[] = []) {
   const tokenManager = {
     acquireContext: async () => ({ credentials: CREDENTIALS, token: 'tok' }),
     forceRefreshToken: async () => 'tok2',
+    failoverCapacity: () => 1,
+    reportOutcome: () => {},
   } as unknown as SingleTokenManager;
 
   return { executor: new RetryExecutor(tokenManager, client), sent };
