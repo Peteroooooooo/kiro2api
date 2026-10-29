@@ -3,8 +3,8 @@
  *
  * One entry per model the upstream `ListAvailableModels` returns for kiro-cli,
  * in the upstream order. Thinking is a request parameter, not a model, so there
- * are no `-thinking` entries; old `-thinking` names still resolve through
- * `mapModel`. When the upstream list changes, edit this table and `mapModel`
+ * are no `-thinking` entries; `mapModel` accepts any id with a `-thinking`
+ * suffix as the plain id. When the upstream list changes, edit this table and `mapModel`
  * together and re-run `pnpm test`.
  */
 

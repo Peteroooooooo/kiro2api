@@ -85,7 +85,7 @@ New API：新建一个「Anthropic Claude」类型的渠道，填上面的 Claud
 - **客户端没说**：能思考的模型就开着思考，强度用模型自己的默认档位。
 - **客户端说了**：以客户端为准。比如 Claude Code 里调的思考强度会照样生效；Cherry Studio 这类客户端发的旧式思考预算（`budget_tokens`）会换算成对应的强度档位。
 - **关不掉思考的模型**（Opus 5.5、Sonnet 5.5）：客户端要求关闭时，按最低强度 low 思考。
-- 旧名字 `claude-opus-5-5-thinking` 这类仍然能用，等同于不带后缀的名字。
+- 任何模型名后面加 `-thinking` 都能用（比如 `claude-sonnet-5-5-thinking`、`glm-5-thinking`），等同于不带后缀的名字，方便沿用老配置。
 
 ## 支持的模型
 

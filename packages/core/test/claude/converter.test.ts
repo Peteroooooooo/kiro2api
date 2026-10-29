@@ -211,7 +211,24 @@ describe('mapModel', () => {
     expect(mapModel('auto')).toBe('auto');
     expect(mapModel('glm')).toBeUndefined();
     expect(mapModel('deepseek')).toBeUndefined();
-    expect(mapModel('auto-thinking')).toBeUndefined();
+  });
+
+  it('a trailing -thinking suffix is accepted on every model and ignored', () => {
+    for (const [name, id] of [
+      ['auto-thinking', 'auto'],
+      ['kimi-k3-thinking', 'kimi-k3'],
+      ['glm-5-thinking', 'glm-5'],
+      ['deepseek-3-2-thinking', 'deepseek-3.2'],
+      ['MiniMax-M2.5-Thinking', 'minimax-m2.5'],
+      ['qwen3-coder-next-thinking', 'qwen3-coder-next'],
+      ['claude-sonnet-5-5-thinking', 'claude-sonnet-5.5'],
+      ['claude-haiku-4-5-thinking', 'claude-haiku-4.5'],
+      ['gpt-5.6-luna-thinking', 'gpt-5.6-luna'],
+    ]) {
+      expect(mapModel(name)).toBe(id);
+    }
+    expect(mapModel('glm-5-thinking-x')).toBeUndefined();
+    expect(mapModel('thinking')).toBeUndefined();
   });
 
   it('test_map_model_gpt_5_6', () => {
