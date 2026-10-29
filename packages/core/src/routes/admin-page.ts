@@ -114,7 +114,7 @@ a { color: var(--accent); }
         <div class="conn-label">可用模型</div>
         <div class="conn-value"><span id="cModels" class="models"></span></div>
       </div>
-      <p class="hint">Claude Code 等 Anthropic 客户端填 Claude 格式地址（客户端会自动补 /v1/messages）；New API 选 Anthropic Claude 类型的渠道，填同一个地址和 API Key。模型名带 -thinking 后缀即开启思考。API Key 由服务端环境变量 KIRO2CLAUDE_API_KEY 决定，要更换请在 Portainer 的 stack 里改这个变量。</p>
+      <p class="hint">Claude Code 等 Anthropic 客户端填 Claude 格式地址（客户端会自动补 /v1/messages）；New API 选 Anthropic Claude 类型的渠道，填同一个地址和 API Key。思考由客户端的请求参数决定，模型名后面加不加 -thinking 都一样。API Key 由服务端环境变量 KIRO2CLAUDE_API_KEY 决定，要更换请在 Portainer 的 stack 里改这个变量。</p>
     </section>
 
     <section class="panel">

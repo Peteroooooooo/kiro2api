@@ -221,6 +221,7 @@ function mapClaudeFamily(lower: string, family: ClaudeFamily): string | undefine
  *
  * - Claude:家族名(sonnet / opus / haiku)+ 紧挨它的版本号查 `CLAUDE_FAMILIES`,见 `mapClaudeFamily`
  * - gpt … sol/terra/luna -> gpt-5.6-{sol,terra,luna}
+ * - 末尾的 `-thinking` 先去掉再识别:思考是请求参数,老客户端配的 `xxx-thinking` 名字对任何模型都等同不带后缀
  *
  * GPT-5.6（OpenAI，kiro-cli 2.12.1 起）走与 Claude **完全相同**的上游
  * conversationState wire，唯一差异就是这里映射出的 modelId。判别子用唯一
@@ -229,7 +230,7 @@ function mapClaudeFamily(lower: string, family: ClaudeFamily): string | undefine
  * → 400 UnsupportedModel（不把不存在的模型静默转发上游）。
  */
 export function mapModel(model: string): string | undefined {
-  const lower = model.toLowerCase();
+  const lower = model.toLowerCase().replace(/-thinking$/, '');
 
   const other = mapOtherModel(lower);
   if (other !== undefined) return other;
