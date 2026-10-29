@@ -24,6 +24,8 @@ export interface RequestContext {
    * 所以 `/claude/v1` 与启动代码 / 单测的行为完全不变。
    */
   stripPluginUsage?: boolean;
+  /** Pool account that served the latest upstream call of this request (pool mode only). */
+  accountId?: string;
 }
 
 export const requestContextStorage = new AsyncLocalStorage<RequestContext>();

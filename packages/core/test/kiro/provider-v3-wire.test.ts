@@ -21,6 +21,8 @@ function makeProvider() {
       token: 'tok',
     }),
     forceRefreshToken: async () => 'tok',
+    failoverCapacity: () => 1,
+    reportOutcome: () => {},
   } as unknown as SingleTokenManager;
   const provider = new KiroProvider(tokenManager);
   const sent: Array<{ url: string; body: string; headers: Record<string, string | false> }> = [];

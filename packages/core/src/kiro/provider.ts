@@ -39,7 +39,7 @@ import {
   type RetryableRequest,
   RetryExecutor,
 } from './retry-executor.js';
-import type { SingleTokenManager } from './token-manager.js';
+import type { TokenSource } from './token-source.js';
 
 /**
  * 上游连接池参数 —— **唯一**构造点，与 `Config.upstreamMaxSockets` 同源。
@@ -56,13 +56,13 @@ export function buildUpstreamAgentOptions(maxSockets: number): https.AgentOption
  * Kiro API Provider —— 与上游 Kiro / CodeWhisperer API 通信的核心组件。
  */
 export class KiroProvider {
-  private tokenManager: SingleTokenManager;
+  private tokenManager: TokenSource;
   /** 共享 HTTP 客户端 */
   private client: AxiosInstance;
   /** 上游调用状态机 —— 三个公共方法都走这一个实例 */
   private executor: RetryExecutor;
 
-  constructor(tokenManager: SingleTokenManager) {
+  constructor(tokenManager: TokenSource) {
     this.tokenManager = tokenManager;
     const httpsAgent = new https.Agent(
       buildUpstreamAgentOptions(tokenManager.config().upstreamMaxSockets),

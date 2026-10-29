@@ -23,6 +23,12 @@
  *    signature upstream accepts; the 400 arrives before any stream, so this is
  *    always pre-commit. Bodies with no reasoningContent are not retried.
  *
+ * With an account pool there is one more: a failure that belongs to the
+ * account (429 not naming model capacity, quota exhausted, unauthorized after
+ * the refresh retry) moves the whole request to the next account, at most
+ * once per account (`accountOutcomeOf`). With a single credential the
+ * failover capacity is 1 and nothing changes.
+ *
  * All other error paths are single-attempt:
  *
  * - 2xx → return the response
@@ -76,7 +82,22 @@ import {
   matchModelCapacityReason,
   ProviderError,
 } from './provider-error.js';
-import type { SingleTokenManager } from './token-manager.js';
+import type { AccountOutcome, CallContext, TokenSource } from './token-source.js';
+
+/**
+ * Conversation key for pool affinity: the root conversation, so a subagent
+ * stays on its parent's account. Read from the already-built Kiro body.
+ */
+export function extractAffinityKey(body: string): string | undefined {
+  try {
+    const state = (JSON.parse(body) as { conversationState?: Record<string, unknown> })
+      .conversationState;
+    const key = state?.rootConversationId ?? state?.conversationId;
+    return typeof key === 'string' && key.length > 0 ? key : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Per-request description. Three callers (main API, stream, MCP) each
@@ -169,10 +190,10 @@ export function applyRetryHeaders(
 }
 
 export class RetryExecutor {
-  private tokenManager: SingleTokenManager;
+  private tokenManager: TokenSource;
   private client: AxiosInstance;
 
-  constructor(tokenManager: SingleTokenManager, client: AxiosInstance) {
+  constructor(tokenManager: TokenSource, client: AxiosInstance) {
     this.tokenManager = tokenManager;
     this.client = client;
   }
@@ -189,6 +210,41 @@ export class RetryExecutor {
    * verbatim so the downstream client can apply its own HTTP-standard backoff.
    */
   async execute(req: RetryableRequest): Promise<AxiosResponse> {
+    const affinityKey = extractAffinityKey(req.body);
+    const exclude = new Set<string>();
+    const capacity = this.tokenManager.failoverCapacity();
+
+    // Account failover (pool only): a failure scoped to one account moves the
+    // request to another account. Everything sent so far was rejected before a
+    // stream started, so the downstream client never sees the failed attempt.
+    while (true) {
+      const used: { ctx?: CallContext } = {};
+      try {
+        const response = await this.executeOnAccount(req, { affinityKey, exclude }, used);
+        this.tokenManager.reportOutcome(used.ctx?.accountId, { kind: 'success' });
+        return response;
+      } catch (e) {
+        const accountId = used.ctx?.accountId;
+        const outcome = accountOutcomeOf(e);
+        if (!outcome || accountId === undefined) throw e;
+        this.tokenManager.reportOutcome(accountId, outcome);
+        exclude.add(accountId);
+        if (exclude.size >= capacity) throw e;
+        getLogger().info({
+          msg: 'account-scoped failure, failing over to another account',
+          type: req.label,
+          account: accountId,
+          outcome: outcome.kind,
+        });
+      }
+    }
+  }
+
+  private async executeOnAccount(
+    req: RetryableRequest,
+    opts: { affinityKey?: string; exclude: ReadonlySet<string> },
+    used: { ctx?: CallContext },
+  ): Promise<AxiosResponse> {
     const log = getLogger();
     let forceRefreshed = false;
     let strippedReasoning = false;
@@ -197,7 +253,8 @@ export class RetryExecutor {
     let attempt = 0;
 
     while (true) {
-      const ctx = await this.tokenManager.acquireContext();
+      const ctx = await this.tokenManager.acquireContext(opts);
+      used.ctx = ctx;
 
       const url = req.buildUrl(ctx.credentials);
       const host = req.buildHost(ctx.credentials);
@@ -288,7 +345,7 @@ export class RetryExecutor {
           forceRefreshed = true;
           log.info('Token may be invalidated upstream, attempting force-refresh');
           try {
-            await this.tokenManager.forceRefreshToken();
+            await this.tokenManager.forceRefreshToken(ctx.accountId);
             log.info('Token force-refreshed, retrying API request');
             continue;
           } catch (e) {
@@ -374,6 +431,26 @@ export class RetryExecutor {
       });
       throw new ProviderError({ kind: 'transient', status }, responseBody);
     }
+  }
+}
+
+/**
+ * Which failures belong to the account rather than the request or the
+ * upstream as a whole. A 429 that names model capacity is upstream-wide.
+ */
+export function accountOutcomeOf(e: unknown): AccountOutcome | undefined {
+  if (!(e instanceof ProviderError)) return undefined;
+  switch (e.kind.kind) {
+    case 'rate_limited':
+      return matchModelCapacityReason(e.body) === undefined
+        ? { kind: 'rate_limited', retryAfterSeconds: e.kind.retryAfterSeconds }
+        : undefined;
+    case 'quota_exhausted':
+      return { kind: 'quota_exhausted' };
+    case 'unauthorized':
+      return { kind: 'unauthorized' };
+    default:
+      return undefined;
   }
 }
 
