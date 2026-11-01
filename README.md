@@ -48,9 +48,11 @@ docker run -d --name kiro2api --restart unless-stopped \
 
 1. **Builder ID 登录**：点「开始登录」，页面给出一个验证码和链接。用任何一台电脑的浏览器打开链接、登录并确认，账号就自动加进来了。帮朋友加账号时，把链接和验证码发给他就行。
 2. **IAM Identity Center 登录**：学校或公司的账号，填管理员给的 Start URL 和 Region，其余同上。
-3. **粘贴凭据**：粘贴 kiro.rs 的 `credentials.json`，或 kiro-cli / Kiro IDE 的 token 文件加注册文件，可以一次粘贴多个。
+3. **粘贴或上传凭据**：粘贴或上传（可以一次选多个文件）kiro.rs 的 `credentials.json`、kiro-cli / Kiro IDE 的 token 文件加注册文件，或者另一台 kiro2api 导出的账号文件。
 
 GitHub、Google 登录的账号不支持。
+
+账号列表每一行的「⋯」里有「导出 JSON」，右上角有「导出全部」（包括已停用的账号）。导出的文件在另一台 kiro2api 的「粘贴或上传凭据」里上传就能导入，名字和 IdC 的 Start URL 会一起带过去。文件里有凭据明文，注意保管。
 
 注意：同一份凭据只能放在一个服务里用。两个服务同时刷新同一个 token 时，其中一个会失效。
 

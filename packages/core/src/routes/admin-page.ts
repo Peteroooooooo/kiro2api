@@ -113,6 +113,38 @@ table.logs tr.detail td { background: var(--row-hover); white-space: normal; pad
 .kv .err { color: var(--bad); white-space: pre-wrap; }
 @media (max-width: 760px) { .kv { grid-template-columns: max-content 1fr; } }
 .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; color: var(--muted); }
+th.act, td.act { width: 1%; white-space: nowrap; text-align: right; }
+.acts { display: inline-flex; gap: 10px; align-items: center; }
+.acts .more { padding: 3px 8px; font-size: 12px; font-weight: 700; letter-spacing: 1px; line-height: 1.2; }
+.switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; cursor: pointer; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch .track { position: absolute; inset: 0; border-radius: 999px; background: var(--bar); transition: background .15s; }
+.switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
+.switch input:checked + .track { background: var(--ok); }
+.switch input:checked + .track::after { transform: translateX(16px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch input:disabled + .track { opacity: .5; }
+.menu { position: fixed; z-index: 40; min-width: 150px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 4px; }
+.menu button { display: block; width: 100%; text-align: left; border: none; background: none; border-radius: 5px; padding: 6px 10px; font-size: 13px; }
+.menu button:hover { background: var(--row-hover); }
+.menu hr { border: none; border-top: 1px solid var(--line); margin: 4px 0; }
+.menu .danger { color: var(--bad); }
+.mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.dialog { background: var(--panel); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.25); width: min(560px, calc(100% - 32px)); padding: 18px; }
+.dialog h3 { margin: 0 0 8px; font-size: 16px; }
+.warnbox { background: var(--chip-warn); color: var(--warn); border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 10px 0; }
+.warnbox ul { margin: 4px 0 0; padding-left: 18px; }
+.preview { font: 12px/1.5 ui-monospace, Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px; white-space: pre; overflow: auto; max-height: 220px; margin: 0; }
+.dialog .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 8px; }
+.drop.over { border-color: var(--accent); background: var(--row-hover); }
+.files { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.files span { font: 12px ui-monospace, Consolas, monospace; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
+.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--panel);
+  padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 60; }
 .hidden { display: none !important; }
 a { color: var(--accent); }
 </style>
@@ -212,7 +244,7 @@ a { color: var(--accent); }
       <div class="tabs">
         <button class="tab active" data-tab="builder">Builder ID 登录</button>
         <button class="tab" data-tab="idc">IAM Identity Center 登录</button>
-        <button class="tab" data-tab="paste">粘贴凭据</button>
+        <button class="tab" data-tab="paste">粘贴或上传凭据</button>
       </div>
 
       <div data-pane="builder">
@@ -230,10 +262,16 @@ a { color: var(--accent); }
       </div>
 
       <div data-pane="paste" class="hidden">
-        <textarea id="pText" placeholder='粘贴 JSON，例如 kiro.rs 的 credentials.json，或 kiro-cli / Kiro IDE 的 token 文件加上注册文件（可以前后连着粘贴）'></textarea>
-        <div class="row" style="margin-top:8px"><label>备注名</label><input id="pName" placeholder="可选"></div>
+        <div class="drop" id="pDrop">
+          <button id="pPick">选择文件</button>
+          <span class="hint" style="margin:0">或把 .json 文件拖到这里，可以一次选多个</span>
+          <input type="file" id="pFile" accept=".json,application/json" multiple class="hidden">
+        </div>
+        <div class="files" id="pFiles"></div>
+        <textarea id="pText" placeholder='粘贴 JSON，例如从另一台 kiro2api 导出的账号文件、kiro.rs 的 credentials.json，或 kiro-cli / Kiro IDE 的 token 文件加上注册文件（可以前后连着粘贴）'></textarea>
+        <div class="row" style="margin-top:8px"><label>备注名</label><input id="pName" placeholder="可选，只对单个账号生效；导出的文件里自带名字"></div>
         <button class="primary" id="pImport">导入</button>
-        <p class="hint">需要 refreshToken 加 clientId / clientSecret。GitHub、Google 社交登录的账号不支持。</p>
+        <p class="hint">选中的文件内容会填进上面的文本框，确认后再点导入。需要 refreshToken 加 clientId / clientSecret。GitHub、Google 社交登录的账号不支持。</p>
       </div>
 
       <div id="loginBox" class="login-box hidden">
@@ -247,11 +285,15 @@ a { color: var(--accent); }
     </section>
 
     <section class="panel">
-      <h2>账号列表</h2>
+      <div class="panel-head">
+        <h2>账号列表</h2>
+        <div class="spacer"></div>
+        <button id="exportAll">导出全部</button>
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>名称</th><th>状态</th><th>额度</th><th>请求 / 失败</th><th>已用 credits</th><th>最近使用</th><th>来源</th><th>操作</th>
+            <th>名称</th><th>状态</th><th>额度</th><th>请求 / 失败</th><th>已用 credits</th><th>最近使用</th><th>来源</th><th class="act">操作</th>
           </tr></thead>
           <tbody id="rows"></tbody>
         </table>
@@ -260,6 +302,26 @@ a { color: var(--accent); }
     </div>
   </div>
 </main>
+<div id="exportMask" class="mask hidden">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="xTitle">
+    <h3 id="xTitle"></h3>
+    <div class="hint" style="margin:0" id="xDesc"></div>
+    <div class="warnbox">
+      文件里有 refreshToken 和 clientSecret 的明文，拿到文件的人就能用这些账号。
+      <ul>
+        <li>不要发到群里、网盘或代码仓库。</li>
+        <li>同一个账号不要在两台 kiro2api 上同时用：一边刷新 token 后，另一边的旧 token 可能失效。</li>
+      </ul>
+    </div>
+    <pre class="preview" id="xPreview"></pre>
+    <div class="btns">
+      <button id="xCancel">取消</button>
+      <button id="xCopy">复制</button>
+      <button class="primary" id="xDownload">下载 JSON</button>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
 <script>
 (function () {
   var KEY_STORE = 'kiro2api.adminKey';
@@ -317,8 +379,11 @@ a { color: var(--accent); }
   }
 
   var SOURCE = { 'builder-id': 'Builder ID', 'idc': 'IdC', 'import': '导入', 'kiro-cli': 'kiro-cli SQLite' };
+  var accountsById = {};
 
   function render(accounts) {
+    accountsById = {};
+    accounts.forEach(function (a) { accountsById[a.id] = a; });
     var tb = $('rows');
     if (!accounts.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">还没有账号，在上面添加一个。</td></tr>'; return; }
     tb.innerHTML = accounts.map(function (a) {
@@ -333,15 +398,15 @@ a { color: var(--accent); }
           + '<div class="sub">查询于 ' + fmtTime(a.quota.checkedAt) + '</div>';
       }
       var name = '<b>' + esc(a.name) + '</b><div class="sub">' + esc(a.email || a.id) + (a.subscription ? ' · ' + esc(a.subscription) : '') + '</div>';
-      var acts = '<div class="actions">'
-        + '<button data-act="toggle" data-id="' + esc(a.id) + '" data-on="' + (a.enabled ? '1' : '0') + '">' + (a.enabled ? '停用' : '启用') + '</button>'
-        + '<button data-act="quota" data-id="' + esc(a.id) + '">查额度</button>'
-        + '<button data-act="rename" data-id="' + esc(a.id) + '" data-name="' + esc(a.name) + '">改名</button>'
-        + (a.source === 'kiro-cli' ? '' : '<button class="danger" data-act="delete" data-id="' + esc(a.id) + '" data-name="' + esc(a.name) + '">删除</button>')
+      var acts = '<div class="acts">'
+        + '<label class="switch" title="' + (a.enabled ? '已启用，点击停用' : '已停用，点击启用') + '">'
+        + '<input type="checkbox" data-act="toggle" data-id="' + esc(a.id) + '"' + (a.enabled ? ' checked' : '') + ' aria-label="启用 ' + esc(a.name) + '">'
+        + '<span class="track"></span></label>'
+        + '<button class="more" data-act="more" data-id="' + esc(a.id) + '" title="更多操作" aria-haspopup="menu">⋯</button>'
         + '</div>';
       return '<tr><td>' + name + '</td><td>' + st + '</td><td>' + q + '</td><td>' + a.stats.requests + ' / ' + a.stats.failures
         + '</td><td>' + fmtNum(a.stats.credits) + '</td><td>' + fmtTime(a.stats.lastUsedAt) + '</td><td>' + esc(SOURCE[a.source] || a.source)
-        + (a.region ? '<div class="sub">' + esc(a.region) + '</div>' : '') + '</td><td>' + acts + '</td></tr>';
+        + (a.region ? '<div class="sub">' + esc(a.region) + '</div>' : '') + '</td><td class="act">' + acts + '</td></tr>';
     }).join('');
   }
 
@@ -365,16 +430,22 @@ a { color: var(--accent); }
     $('cKey').textContent = keyShown ? apiKey : '••••••••••••••••';
     this.textContent = keyShown ? '隐藏' : '显示';
   };
+  function copyText(text, done) {
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done); return; }
+    var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+    ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
+  }
+  var toastTimer = null;
+  function toast(text) {
+    var t = $('toast'); t.textContent = text; t.classList.remove('hidden');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.add('hidden'); }, 2000);
+  }
   document.querySelectorAll('[data-copy]').forEach(function (b) {
     b.addEventListener('click', function () {
       var id = b.getAttribute('data-copy');
       var text = id === 'cKey' ? apiKey : $(id).textContent;
-      var done = function () { var t = b.textContent; b.textContent = '已复制'; setTimeout(function () { b.textContent = t; }, 1200); };
-      if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done);
-      else {
-        var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
-        ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
-      }
+      copyText(text, function () { var t = b.textContent; b.textContent = '已复制'; setTimeout(function () { b.textContent = t; }, 1200); });
     });
   });
 
@@ -390,21 +461,147 @@ a { color: var(--accent); }
     }).catch(function (e) { if (e.message !== 'unauthorized') setMsg('加载失败：' + e.message); });
   }
 
-  $('rows').addEventListener('click', function (ev) {
-    var b = ev.target.closest('button[data-act]'); if (!b) return;
-    var id = b.getAttribute('data-id'); var act = b.getAttribute('data-act');
-    var p;
-    if (act === 'toggle') p = api('PATCH', '/accounts/' + id, { enabled: b.getAttribute('data-on') !== '1' });
-    else if (act === 'quota') { b.disabled = true; p = api('POST', '/accounts/' + id + '/quota'); }
-    else if (act === 'rename') {
-      var n = prompt('新名称', b.getAttribute('data-name')); if (!n) return;
-      p = api('PATCH', '/accounts/' + id, { name: n });
-    } else if (act === 'delete') {
-      if (!confirm('删除账号 ' + b.getAttribute('data-name') + '？凭据会从 accounts.json 中移除。')) return;
-      p = api('DELETE', '/accounts/' + id);
-    }
-    p.then(load).catch(function (e) { if (e.message !== 'unauthorized') alert(e.message); load(); });
+  $('rows').addEventListener('change', function (ev) {
+    var sw = ev.target.closest('input[data-act="toggle"]'); if (!sw) return;
+    var a = accountsById[sw.getAttribute('data-id')]; if (!a) return;
+    var on = sw.checked;
+    sw.disabled = true;
+    api('PATCH', '/accounts/' + a.id, { enabled: on }).then(function () {
+      toast((on ? '已启用「' : '已停用「') + a.name + '」');
+      return load();
+    }).catch(function (e) {
+      sw.checked = !on; sw.disabled = false;
+      if (e.message !== 'unauthorized') toast('操作失败：' + e.message);
+    });
   });
+
+  // ---------- 「⋯」菜单 ----------
+  var menuFor = null;
+  function closeMenu() {
+    var m = document.querySelector('.menu'); if (m) m.remove();
+    menuFor = null;
+  }
+  function openMenu(anchor, a) {
+    closeMenu();
+    menuFor = a.id;
+    var m = document.createElement('div');
+    m.className = 'menu'; m.setAttribute('role', 'menu');
+    m.innerHTML = '<button data-menu="quota">查额度</button>'
+      + '<button data-menu="rename">改名</button>'
+      + '<button data-menu="export">导出 JSON</button>'
+      + (a.source === 'kiro-cli' ? '' : '<hr><button class="danger" data-menu="delete">删除</button>');
+    document.body.appendChild(m);
+    var r = anchor.getBoundingClientRect();
+    var top = r.bottom + 4 + m.offsetHeight > window.innerHeight - 8 ? r.top - 4 - m.offsetHeight : r.bottom + 4;
+    m.style.top = Math.max(8, top) + 'px';
+    m.style.left = Math.max(8, r.right - m.offsetWidth) + 'px';
+    m.addEventListener('click', function (ev) {
+      var b = ev.target.closest('button[data-menu]'); if (!b) return;
+      var act = b.getAttribute('data-menu');
+      closeMenu();
+      var p;
+      if (act === 'export') { openExport([a]); return; }
+      if (act === 'quota') {
+        p = api('POST', '/accounts/' + a.id + '/quota').then(function () { toast('已刷新「' + a.name + '」的额度'); });
+      } else if (act === 'rename') {
+        var n = prompt('新名称', a.name); if (!n) return;
+        p = api('PATCH', '/accounts/' + a.id, { name: n });
+      } else if (act === 'delete') {
+        if (!confirm('删除账号 ' + a.name + '？凭据会从 accounts.json 中移除。')) return;
+        p = api('DELETE', '/accounts/' + a.id);
+      }
+      p.then(load).catch(function (e) { if (e.message !== 'unauthorized') alert(e.message); load(); });
+    });
+  }
+  $('rows').addEventListener('click', function (ev) {
+    var b = ev.target.closest('button[data-act="more"]'); if (!b) return;
+    ev.stopPropagation();
+    var a = accountsById[b.getAttribute('data-id')]; if (!a) return;
+    if (menuFor === a.id) closeMenu(); else openMenu(b, a);
+  });
+  document.addEventListener('click', function (ev) { if (menuFor && !ev.target.closest('.menu')) closeMenu(); });
+  window.addEventListener('scroll', function () { if (menuFor) closeMenu(); }, true);
+  window.addEventListener('resize', function () { if (menuFor) closeMenu(); });
+
+  // ---------- 导出 ----------
+  var exportData = null;
+  var exportFile = '';
+  function maskSecret(v) { return typeof v === 'string' && v.length > 8 ? v.slice(0, 6) + '…（已隐藏）' : v; }
+  function safeFileName(s) { return String(s).replace(/[^A-Za-z0-9._@\\u4e00-\\u9fa5-]+/g, '_').slice(0, 60) || 'account'; }
+  function openExport(list) {
+    var all = !list;
+    exportData = null;
+    $('xTitle').textContent = all ? '导出全部账号' : '导出账号「' + list[0].name + '」';
+    $('xDesc').textContent = '读取中…';
+    $('xPreview').textContent = '';
+    $('xCopy').disabled = true; $('xDownload').disabled = true;
+    $('exportMask').classList.remove('hidden');
+    api('POST', '/accounts/export', all ? {} : { ids: list.map(function (a) { return a.id; }) }).then(function (r) {
+      exportData = r;
+      var today = new Intl.DateTimeFormat('sv-SE').format(new Date());
+      exportFile = all ? 'kiro2api-accounts-' + today + '.json' : 'kiro2api-account-' + safeFileName(list[0].name) + '.json';
+      $('xDesc').textContent = (all ? '共 ' + r.accounts.length + ' 个账号（包括已停用的）。' : '')
+        + '文件名 ' + exportFile + '。在另一台 kiro2api 的「粘贴或上传凭据」里上传就能导入。';
+      var shown = JSON.parse(JSON.stringify(r));
+      shown.accounts.forEach(function (x) {
+        x.credentials.refreshToken = maskSecret(x.credentials.refreshToken);
+        x.credentials.clientSecret = maskSecret(x.credentials.clientSecret);
+      });
+      $('xPreview').textContent = JSON.stringify(shown, null, 2);
+      $('xCopy').disabled = false; $('xDownload').disabled = false;
+    }).catch(function (e) {
+      if (e.message === 'unauthorized') { closeExport(); return; }
+      $('xDesc').textContent = '导出失败：' + e.message;
+    });
+  }
+  function closeExport() { exportData = null; $('exportMask').classList.add('hidden'); }
+  function exportText() { return JSON.stringify(exportData, null, 2) + '\\n'; }
+  $('exportAll').onclick = function () { openExport(null); };
+  $('xCancel').onclick = closeExport;
+  $('exportMask').addEventListener('click', function (ev) { if (ev.target === this) closeExport(); });
+  $('xCopy').onclick = function () {
+    if (!exportData) return;
+    copyText(exportText(), function () { closeExport(); toast('已复制到剪贴板'); });
+  };
+  $('xDownload').onclick = function () {
+    if (!exportData) return;
+    var url = URL.createObjectURL(new Blob([exportText()], { type: 'application/json' }));
+    var link = document.createElement('a'); link.href = url; link.download = exportFile;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    closeExport(); toast('已下载 ' + exportFile);
+  };
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Escape') return;
+    if (menuFor) closeMenu();
+    if (!$('exportMask').classList.contains('hidden')) closeExport();
+  });
+
+  // ---------- 上传凭据文件 ----------
+  var MAX_FILE_BYTES = 1024 * 1024;
+  function readFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return;
+    var tooBig = files.filter(function (f) { return f.size > MAX_FILE_BYTES; });
+    if (tooBig.length) { setMsg(tooBig.map(function (f) { return f.name; }).join('、') + ' 超过 1 MB，不像凭据文件'); return; }
+    Promise.all(files.map(function (f) { return f.text(); })).then(function (texts) {
+      var parsedAll = texts.every(function (t) { try { JSON.parse(t); return true; } catch (e) { return false; } });
+      $('pText').value = files.length > 1 && parsedAll
+        ? '[\\n' + texts.map(function (t) { return t.trim(); }).join(',\\n') + '\\n]'
+        : texts.join('\\n');
+      $('pFiles').innerHTML = files.map(function (f) { return '<span>' + esc(f.name) + '</span>'; }).join('');
+      setMsg('已读入 ' + files.length + ' 个文件，确认后点「导入」。', true);
+    }).catch(function (e) { setMsg('读取文件失败：' + e.message); });
+  }
+  $('pPick').onclick = function () { $('pFile').click(); };
+  $('pFile').onchange = function () { readFiles(this.files); this.value = ''; };
+  ['dragenter', 'dragover'].forEach(function (n) {
+    $('pDrop').addEventListener(n, function (ev) { ev.preventDefault(); this.classList.add('over'); });
+  });
+  ['dragleave', 'drop'].forEach(function (n) {
+    $('pDrop').addEventListener(n, function (ev) { ev.preventDefault(); this.classList.remove('over'); });
+  });
+  $('pDrop').addEventListener('drop', function (ev) { readFiles(ev.dataTransfer && ev.dataTransfer.files); });
 
   document.querySelectorAll('.tab').forEach(function (t) {
     t.addEventListener('click', function () {
@@ -466,7 +663,7 @@ a { color: var(--accent); }
       r.results.forEach(function (x) { if (!x.verified) lines.push(x.id + ' 验证失败：' + x.error); });
       (r.errors || []).forEach(function (x) { lines.push(x); });
       setMsg(lines.join('\\n'), ok === r.results.length && !(r.errors || []).length);
-      if (ok) $('pText').value = '';
+      if (ok) { $('pText').value = ''; $('pFiles').innerHTML = ''; }
       load();
     }).catch(function (e) { setMsg('导入失败：' + e.message); }).then(function () { b.disabled = false; });
   };
@@ -745,7 +942,8 @@ a { color: var(--accent); }
 
   setInterval(function () {
     if (!key || $('app').classList.contains('hidden')) return;
-    if (view === 'logs') { if ($('lAuto').checked && lOpenId === null) loadLogs(); } else load();
+    if (view === 'logs') { if ($('lAuto').checked && lOpenId === null) loadLogs(); }
+    else if (!menuFor && $('exportMask').classList.contains('hidden')) load();
   }, 15000);
   if (key) showApp(); else showAuth('');
 })();

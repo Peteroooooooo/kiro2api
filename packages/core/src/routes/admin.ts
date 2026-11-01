@@ -132,6 +132,18 @@ export async function registerAdminRoutes(
 
       api.get('/accounts', async () => ({ accounts: pool.list() }));
 
+      // POST so the response (plain-text credentials) is never a cacheable GET.
+      api.post<{ Body: { ids?: unknown } }>('/accounts/export', async (request, reply) => {
+        const ids = request.body?.ids;
+        if (ids !== undefined && !(Array.isArray(ids) && ids.every((x) => typeof x === 'string'))) {
+          return fail(reply, 400, 'ids must be an array of account ids');
+        }
+        const accounts = pool.exportAccounts(ids);
+        if (ids && accounts.length === 0) return fail(reply, 404, 'account not found');
+        request.log.info({ msg: 'accounts exported', count: accounts.length });
+        return { exportedAt: new Date().toISOString(), accounts };
+      });
+
       api.post<{ Body: { text?: unknown; name?: unknown } }>(
         '/accounts/import',
         async (request, reply) => {

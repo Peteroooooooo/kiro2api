@@ -99,6 +99,15 @@ export interface NewAccount {
   credentials: KiroCredentials;
 }
 
+export interface ExportedAccount {
+  name: string;
+  email?: string;
+  subscription?: string;
+  source: AccountSource;
+  startUrl?: string;
+  credentials: Omit<KiroCredentials, 'accessToken' | 'expiresAt'>;
+}
+
 export class AccountPool implements TokenSource {
   readonly #config: Config;
   readonly #store: AccountStore;
@@ -255,6 +264,29 @@ export class AccountPool implements TokenSource {
 
   nameOf(id: string): string | undefined {
     return this.#slots.get(id)?.account.name;
+  }
+
+  /**
+   * Accounts with their current credentials, in a shape `parseImport` reads back
+   * (`{ accounts: [{ name, email, startUrl, credentials }] }`). The access token
+   * is left out: it is short-lived and the importing side refreshes anyway.
+   * Unknown ids are skipped; no ids = every account, disabled ones included.
+   */
+  exportAccounts(ids?: readonly string[]): ExportedAccount[] {
+    const slots = ids
+      ? ids.map((id) => this.#slots.get(id)).filter((s): s is Slot => s !== undefined)
+      : [...this.#slots.values()];
+    return slots.map((s) => {
+      const { accessToken: _access, expiresAt: _expires, ...credentials } = s.manager.credentials();
+      return {
+        name: s.account.name,
+        email: s.account.email,
+        subscription: s.account.subscription,
+        source: s.account.source,
+        startUrl: s.account.startUrl,
+        credentials,
+      };
+    });
   }
 
   /** Add an account and verify it with one token refresh. Returns its id. */
