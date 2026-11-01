@@ -15,11 +15,13 @@ import type { KiroProvider } from '../kiro/provider.js';
 import type { HookBus } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
+import { noteRequestLog } from '../shared/request-log.js';
 import { countAllTokens } from '../token.js';
 import {
   ConversionError,
   type ConversionResult,
   convertRequest,
+  reasoningLogFields,
   responseThinkingEnabled,
   toKiroRequest,
 } from './converter.js';
@@ -145,6 +147,7 @@ export function createPostMessages(deps: PostMessagesDeps) {
 
     // Build Kiro request
     const kiroRequest = toKiroRequest(conversionResult);
+    noteRequestLog(reasoningLogFields(kiroRequest));
 
     let requestBody: string;
     try {
@@ -203,6 +206,8 @@ export function createPostMessages(deps: PostMessagesDeps) {
         rescueRegistry,
       );
     }
+
+    noteRequestLog({ emptyAttempts: result.emptyAttempts });
 
     // 诊断抓包:重试耗尽仍空(确定性空流)时,落盘原始 Claude 请求体供事后定位
     // 根因。仅在 KIRO2CLAUDE_CAPTURE_EMPTY_DIR 配置后启用,默认不抓。

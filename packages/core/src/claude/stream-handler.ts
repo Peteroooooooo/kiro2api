@@ -51,6 +51,7 @@ import type { KiroProvider } from '../kiro/provider.js';
 import type { HookBus } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
+import { noteRequestError } from '../shared/request-log.js';
 import type { MessageHandlerResult } from './empty-capture.js';
 import { mapProviderError } from './error-mapper.js';
 import {
@@ -554,6 +555,7 @@ export async function handleStreamRequest(
     // retries; fatal → 502/api_error hard-stop. Client message is neutral; the raw
     // code/message was already logged at the Error/Exception case (leak rule).
     const { status, errorType, message } = upstreamErrorWire(upstreamError.retryable);
+    noteRequestError(errorType, message, `${upstreamError.code}: ${upstreamError.message}`);
     // Redacted reasoning can consume credit without triggering commit. Preserve
     // any metering already received in that case, just as the non-stream path does.
     const finalEvents =
@@ -621,6 +623,7 @@ export async function handleStreamRequest(
     // Committed via the keepalive timeout, then turned out empty → fall back to
     // an in-band error event (headers are already sent, can't send a status).
     log.warn({ msg: 'upstream returned empty stream after commit, in-band error', ...logFields });
+    noteRequestError('overloaded_error', emptyMessage, 'empty upstream response');
     if (!aborted.value) {
       safeWrite(reply.raw, sseEventToString(createSseErrorEvent('overloaded_error', emptyMessage)));
     }

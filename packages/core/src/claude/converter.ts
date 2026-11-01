@@ -511,6 +511,12 @@ export interface ConversionResult {
  * 三个协议 handler(Claude / Chat / Responses)共用的 wire 装配:conversationState +
  * 顶层 additionalModelRequestFields。集中在这里,加顶层字段时不用改三处。
  */
+/** Thinking / effort as actually sent upstream, for the admin request log. */
+export function reasoningLogFields(req: KiroRequest): { thinking?: string; effort?: string } {
+  const f = req.additionalModelRequestFields;
+  return { thinking: f?.thinking?.type, effort: f?.output_config?.effort ?? f?.reasoning?.effort };
+}
+
 export function toKiroRequest(result: ConversionResult): KiroRequest {
   // undefined 由 serializeKiroRequest 的 JSON.stringify 自然省略,wire 上不会多出键。
   return {

@@ -44,6 +44,7 @@ import type {
 import type { Config } from '../model/config.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
+import { noteAccountAttempt } from '../shared/request-log.js';
 import {
   type AccountSource,
   type AccountStore,
@@ -139,6 +140,7 @@ export class AccountPool implements TokenSource {
         if (opts.affinityKey) this.#setAffinity(opts.affinityKey, slot.account.id);
         const reqCtx = getRequestContext();
         if (reqCtx) reqCtx.accountId = slot.account.id;
+        noteAccountAttempt(slot.account.id);
         return { ...ctx, accountId: slot.account.id };
       } catch (e) {
         lastError = e;
@@ -249,6 +251,10 @@ export class AccountPool implements TokenSource {
 
   has(id: string): boolean {
     return this.#slots.has(id);
+  }
+
+  nameOf(id: string): string | undefined {
+    return this.#slots.get(id)?.account.name;
   }
 
   /** Add an account and verify it with one token refresh. Returns its id. */

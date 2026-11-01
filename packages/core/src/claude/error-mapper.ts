@@ -28,6 +28,7 @@
 import type { FastifyReply } from 'fastify';
 import { ProviderError } from '../kiro/provider-error.js';
 import { getLogger } from '../shared/logger.js';
+import { noteRequestError } from '../shared/request-log.js';
 import { assertNever, upstreamErrorWire } from './stream.js';
 import { createErrorResponse } from './types.js';
 
@@ -205,10 +206,24 @@ export function classifyProviderError(err: unknown): ClassifiedProviderError {
  */
 export function mapProviderError(err: unknown, reply: FastifyReply): void {
   const c = classifyProviderError(err);
+  noteRequestError(c.errorType, c.message, providerErrorDetail(err));
   if (c.retryAfterSeconds !== undefined) {
     reply.header('Retry-After', String(c.retryAfterSeconds));
   }
   reply.status(c.status).send(createErrorResponse(c.errorType, c.message));
+}
+
+/**
+ * Internal cause for the admin request log: the provider error kind (plus the
+ * capacity / quota reason when there is one) and the upstream-aware message.
+ * Admin-only, like the logs; never part of a response body.
+ */
+export function providerErrorDetail(err: unknown): string {
+  if (err instanceof ProviderError) {
+    const reason = 'reason' in err.kind && err.kind.reason ? ` (${err.kind.reason})` : '';
+    return `${err.kind.kind}${reason}: ${err.message}`;
+  }
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

@@ -9,18 +9,18 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>kiro2api 账号池</title>
+<title>kiro2api 后台</title>
 <style>
 :root {
   --bg: #f5f6f8; --panel: #ffffff; --text: #1d2129; --muted: #6b7280; --line: #e5e7eb;
   --accent: #2563eb; --accent-text: #ffffff; --ok: #15803d; --warn: #b45309; --bad: #b91c1c;
-  --chip-ok: #dcfce7; --chip-warn: #fef3c7; --chip-bad: #fee2e2; --bar: #e5e7eb;
+  --chip-ok: #dcfce7; --chip-warn: #fef3c7; --chip-bad: #fee2e2; --bar: #e5e7eb; --row-hover: #f9fafb;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #111318; --panel: #1a1d24; --text: #e5e7eb; --muted: #9ca3af; --line: #2b303b;
     --accent: #3b82f6; --accent-text: #ffffff; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
-    --chip-ok: #14532d; --chip-warn: #78350f; --chip-bad: #7f1d1d; --bar: #2b303b;
+    --chip-ok: #14532d; --chip-warn: #78350f; --chip-bad: #7f1d1d; --bar: #2b303b; --row-hover: #20242c;
   }
 }
 * { box-sizing: border-box; }
@@ -79,6 +79,39 @@ td .sub { color: var(--muted); font-size: 12px; }
 .models { display: flex; flex-wrap: wrap; gap: 4px; }
 .models span { font: 12px ui-monospace, Consolas, monospace; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
 @media (max-width: 640px) { .conn { grid-template-columns: 1fr; } }
+.nav { display: flex; gap: 4px; }
+.nav button { border: none; background: none; padding: 6px 12px; color: var(--muted); }
+.nav button.active { background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--line); }
+.panel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.panel-head h2 { margin: 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: none; border-radius: 0; padding: 5px 12px; background: var(--panel); color: var(--muted); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.active { background: var(--accent); color: var(--accent-text); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.card .k { color: var(--muted); font-size: 12px; }
+.card .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.card .s { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.filters input[type=search] { min-width: 220px; flex: 1; max-width: 320px; }
+.filters label.chk { color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+table.logs { min-width: 1100px; }
+table.logs th, table.logs td { padding: 7px 6px; white-space: nowrap; }
+table.logs th.n, table.logs td.n { text-align: right; font-variant-numeric: tabular-nums; }
+table.logs tr.r { cursor: pointer; }
+table.logs tr.r:hover, table.logs tr.r.open { background: var(--row-hover); }
+table.logs td.est { color: var(--muted); }
+table.logs tr.detail td { background: var(--row-hover); white-space: normal; padding: 10px 14px 14px; }
+.chip.bad { background: var(--chip-bad); color: var(--bad); }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.slow { color: var(--warn); }
+.kv { display: grid; grid-template-columns: max-content 1fr max-content 1fr; gap: 4px 16px; font-size: 13px; }
+.kv .k { color: var(--muted); }
+.kv .v { word-break: break-all; }
+.kv .err { color: var(--bad); white-space: pre-wrap; }
+@media (max-width: 760px) { .kv { grid-template-columns: max-content 1fr; } }
+.pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; color: var(--muted); }
 .hidden { display: none !important; }
 a { color: var(--accent); }
 </style>
@@ -95,13 +128,69 @@ a { color: var(--accent); }
 
   <div id="app" class="hidden">
     <header>
-      <h1>kiro2api 账号池</h1>
+      <h1>kiro2api</h1>
+      <nav class="nav hidden" id="nav">
+        <button data-view="pool" class="active">账号池</button>
+        <button data-view="logs">请求日志</button>
+      </nav>
       <div class="stats" id="stats"></div>
       <div class="spacer"></div>
       <button id="refreshAll">刷新全部额度</button>
       <button id="logout">退出</button>
     </header>
 
+    <div id="logsView" class="hidden">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>汇总</h2>
+          <div class="seg" id="lRange">
+            <button data-range="1h">1 小时</button>
+            <button data-range="today" class="active">今天</button>
+            <button data-range="7d">7 天</button>
+            <button data-range="30d">30 天</button>
+          </div>
+          <span class="hint" style="margin:0">跟随下方的账号和模型筛选</span>
+        </div>
+        <div class="cards" id="lCards"></div>
+        <p class="hint">输入是未命中缓存的部分。缓存读和缓存写是 derived 插件根据 credits 反推的估算值（上游不直接报告缓存），所以用灰色显示。总输入 = 输入 + 缓存读 + 缓存写。</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>请求列表</h2></div>
+        <div class="filters">
+          <select id="lAccount"><option value="">全部账号</option></select>
+          <select id="lModel"><option value="">全部模型</option></select>
+          <select id="lStatus">
+            <option value="">全部状态</option>
+            <option value="ok">成功</option>
+            <option value="error">失败</option>
+          </select>
+          <input id="lSearch" type="search" placeholder="搜索请求 ID / IP / User-Agent">
+          <div class="spacer"></div>
+          <label class="chk"><input type="checkbox" id="lAuto" checked> 自动刷新</label>
+          <button id="lRefresh">刷新</button>
+        </div>
+        <div class="table-wrap">
+          <table class="logs">
+            <thead><tr>
+              <th>时间</th><th>账号</th><th>模型</th><th>状态</th>
+              <th class="n">总耗时</th><th class="n">首字</th>
+              <th class="n">输入</th><th class="n">缓存读</th><th class="n">缓存写</th><th class="n">输出</th>
+              <th class="n">credits</th><th>客户端</th>
+            </tr></thead>
+            <tbody id="lRows"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <span id="lPageInfo"></span>
+          <button id="lPrev">上一页</button>
+          <button id="lNext">下一页</button>
+        </div>
+        <p class="hint">点击一行查看详情。只记录元数据，不记录请求和回复的正文。</p>
+      </section>
+    </div>
+
+    <div id="poolView">
     <section class="panel">
       <h2>接入信息</h2>
       <div class="conn">
@@ -167,6 +256,7 @@ a { color: var(--accent); }
         </table>
       </div>
     </section>
+    </div>
   </div>
 </main>
 <script>
@@ -262,6 +352,9 @@ a { color: var(--accent); }
     $('cOpenai').textContent = root + '/openai/v1';
     api('GET', '/connection').then(function (c) {
       apiKey = c.apiKey;
+      logsEnabled = Boolean(c.requestLog);
+      $('nav').classList.toggle('hidden', !logsEnabled);
+      if (logsEnabled && location.hash === '#logs') setView('logs');
       $('cKey').textContent = keyShown ? apiKey : '••••••••••••••••';
       $('cModels').innerHTML = c.models.map(function (m) { return '<span>' + esc(m) + '</span>'; }).join('');
     }).catch(function () {});
@@ -393,7 +486,257 @@ a { color: var(--accent); }
   };
   $('keyInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('keySave').click(); });
 
-  setInterval(function () { if (key && !$('app').classList.contains('hidden')) load(); }, 15000);
+  // ---------- 请求日志 ----------
+  var logsEnabled = false;
+  var view = 'pool';
+  var DAY = 86400000;
+  var lRange = 'today';
+  var lPage = 0;
+  var L_PAGE = 50;
+  var lOpenId = null;
+  var lItems = [];
+  var lTotal = 0;
+  var lFacetsLoaded = false;
+  var dfTime = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  var dfDayTime = new Intl.DateTimeFormat(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  var dfFull = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  var STOP = { end_turn: '正常结束', tool_use: '调用工具', max_tokens: '达到输出上限', stop_sequence: '遇到停止序列', model_context_window_exceeded: '上下文已满' };
+  var ERR = { rate_limit_error: '限流', overloaded_error: '上游过载', billing_error: '额度耗尽', invalid_request_error: '请求无效',
+    api_error: '服务错误', authentication_error: '认证失败', permission_error: '无权限', not_found_error: '未找到', internal_error: '内部错误' };
+
+  function startOfToday() {
+    var off = new Date().getTimezoneOffset() * 60000;
+    return Math.floor((Date.now() - off) / DAY) * DAY + off;
+  }
+  function rangeSince(r) {
+    var now = Date.now();
+    if (r === '1h') return now - 3600000;
+    if (r === '7d') return now - 7 * DAY;
+    if (r === '30d') return now - 30 * DAY;
+    return startOfToday();
+  }
+  function fmtTok(n) {
+    if (n == null) return '-';
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+  }
+  function fmtMs(ms) {
+    if (ms == null) return '-';
+    ms = Math.round(ms);
+    return ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(1) + ' s';
+  }
+  function fmtLogTime(ts) { return ts >= startOfToday() ? dfTime.format(ts) : dfDayTime.format(ts); }
+  function fmtCredits(n, digits) { return n == null ? '-' : n.toFixed(digits); }
+  function protoOf(p) {
+    if (p.indexOf('/chat/completions') >= 0) return 'OpenAI Chat';
+    if (p.indexOf('/responses') >= 0) return 'OpenAI Responses';
+    return 'Claude';
+  }
+  function reasoningOf(l) {
+    if (l.thinking === 'disabled') return '不思考';
+    if (l.thinking === 'adaptive') return '思考' + (l.effort ? ' ' + l.effort : '');
+    if (l.effort) return l.effort === 'none' ? '不推理' : '推理 ' + l.effort;
+    return '';
+  }
+  function clientOf(ua) {
+    if (!ua) return '-';
+    var s = ua.toLowerCase();
+    if (s.indexOf('claude-cli') >= 0 || s.indexOf('claude-code') >= 0) return 'Claude Code';
+    if (s.indexOf('codex') >= 0) return 'Codex';
+    if (s.indexOf('anthropic') >= 0) return 'Anthropic SDK';
+    if (s.indexOf('openai') >= 0) return 'OpenAI SDK';
+    return ua.split(/[ (]/)[0];
+  }
+  function failed(l) { return l.status >= 400 || Boolean(l.errorType); }
+  function stopOf(l) { return l.stopReason ? (STOP[l.stopReason] || l.stopReason) : ''; }
+
+  function logQuery(forList) {
+    var q = [];
+    var add = function (k, v) { if (v !== '' && v != null) q.push(k + '=' + encodeURIComponent(v)); };
+    add('account', $('lAccount').value);
+    add('model', $('lModel').value);
+    if (forList) {
+      add('status', $('lStatus').value);
+      add('q', $('lSearch').value.trim());
+      add('limit', L_PAGE);
+      add('offset', lPage * L_PAGE);
+    } else {
+      add('since', rangeSince(lRange));
+    }
+    return q.length ? '?' + q.join('&') : '';
+  }
+
+  function loadFacets() {
+    return api('GET', '/logs/facets').then(function (f) {
+      var fill = function (sel, items, label) {
+        var cur = sel.value;
+        sel.innerHTML = '<option value="">' + label + '</option>' + items.map(function (it) {
+          return '<option value="' + esc(it.value) + '">' + esc(it.text) + '</option>';
+        }).join('');
+        sel.value = cur;
+        if (sel.value !== cur) sel.value = '';
+      };
+      fill($('lAccount'), f.accounts.map(function (a) { return { value: a.id, text: a.name }; }), '全部账号');
+      fill($('lModel'), f.models.map(function (m) { return { value: m, text: m }; }), '全部模型');
+      lFacetsLoaded = true;
+    });
+  }
+
+  function renderCards(s) {
+    var totalIn = s.inputTokens + s.cacheReadTokens + s.cacheWriteTokens;
+    var cards = [
+      ['请求数', s.requests.toLocaleString(), '成功 ' + (s.requests - s.failed) + ' · 失败 ' + s.failed],
+      ['输入', fmtTok(s.inputTokens), '总输入 ' + fmtTok(totalIn)],
+      ['缓存读 ≈', fmtTok(s.cacheReadTokens), '命中率 ' + (totalIn ? (s.cacheReadTokens / totalIn * 100).toFixed(1) : '0') + '%'],
+      ['缓存写 ≈', fmtTok(s.cacheWriteTokens), ''],
+      ['输出', fmtTok(s.outputTokens), ''],
+      ['credits', s.credits.toFixed(2), '平均每次 ' + (s.requests ? (s.credits / s.requests).toFixed(3) : '0')],
+      ['平均耗时', fmtMs(s.avgDurationMs), '平均首字 ' + fmtMs(s.avgTtftMs)]
+    ];
+    $('lCards').innerHTML = cards.map(function (c) {
+      return '<div class="card"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div><div class="s">' + (c[2] || '&nbsp;') + '</div></div>';
+    }).join('');
+  }
+
+  function statusCell(l) {
+    if (failed(l)) {
+      return '<span class="chip bad">' + (l.status >= 400 ? l.status : '出错') + '</span><div class="sub">'
+        + esc(ERR[l.errorType] || l.errorType || '') + '</div>';
+    }
+    if (l.clientDisconnected) return '<span class="chip cooling">' + l.status + '</span><div class="sub">客户端断开</div>';
+    if (l.stopReason === 'max_tokens' || l.stopReason === 'model_context_window_exceeded') {
+      return '<span class="chip cooling">' + l.status + '</span><div class="sub">' + esc(stopOf(l)) + '</div>';
+    }
+    return '<span class="chip ok">' + l.status + '</span><div class="sub">' + esc(stopOf(l)) + '</div>';
+  }
+
+  function detailRow(l) {
+    var acct = esc(l.accountName || '-');
+    if (l.accountsTried) acct += ' <span class="sub">（先后用过 ' + esc(l.accountsTried.join(' → ')) + '）</span>';
+    var err = '无';
+    if (l.errorType) {
+      err = '<span class="err">' + esc(l.errorType) + (l.errorMessage ? '：' + esc(l.errorMessage) : '')
+        + (l.errorDetail ? '\\n' + esc(l.errorDetail) : '') + '</span>';
+    }
+    var credits = fmtCredits(l.credits, 4);
+    if (l.meteringLost) credits += ' <span class="err">计量帧丢失：上游可能已扣费但没有记账</span>';
+    var tokens = [l.inputTokens, l.cacheReadTokens, l.cacheWriteTokens, l.outputTokens].map(function (n) {
+      return n == null ? '-' : n.toLocaleString();
+    }).join(' / ');
+    var kv = [
+      ['请求 ID', '<span class="mono">' + esc(l.reqId) + '</span>'],
+      ['时间', dfFull.format(l.ts)],
+      ['账号', acct],
+      ['接口', esc(protoOf(l.path)) + ' · ' + (l.stream ? '流式' : '非流式')],
+      ['路径', '<span class="mono">' + esc(l.method + ' ' + l.path) + '</span>'],
+      ['模型', '<span class="mono">' + esc(l.model || '-') + '</span>'],
+      ['思考 / 推理', esc(reasoningOf(l) || '-')],
+      ['结束原因', l.stopReason ? esc(stopOf(l)) + ' <span class="sub">(' + esc(l.stopReason) + ')</span>' : '-'],
+      ['总耗时 / 首字', fmtMs(l.durationMs) + ' / ' + fmtMs(l.ttftMs)],
+      ['错误', err],
+      ['上游报告的上下文', l.contextTokens == null ? '-' : l.contextTokens.toLocaleString()],
+      ['输入 / 缓存读 / 缓存写 / 输出', tokens],
+      ['credits', credits],
+      ['空流重试', l.emptyAttempts + ' 次'],
+      ['调用的工具', l.toolNames ? esc(l.toolNames.join('、')) : '-'],
+      ['客户端断开', l.clientDisconnected ? '是' : '否'],
+      ['客户端 IP', '<span class="mono">' + esc(l.clientIp || '-') + '</span>'],
+      ['User-Agent', '<span class="mono">' + esc(l.userAgent || '-') + '</span>']
+    ];
+    return '<tr class="detail"><td colspan="12"><div class="kv">' + kv.map(function (p) {
+      return '<div class="k">' + p[0] + '</div><div class="v">' + p[1] + '</div>';
+    }).join('') + '</div></td></tr>';
+  }
+
+  function renderLogRows() {
+    var pages = Math.max(1, Math.ceil(lTotal / L_PAGE));
+    $('lPageInfo').textContent = '共 ' + lTotal + ' 条 · 第 ' + (lPage + 1) + ' / ' + pages + ' 页';
+    $('lPrev').disabled = lPage === 0;
+    $('lNext').disabled = lPage >= pages - 1;
+    if (!lItems.length) { $('lRows').innerHTML = '<tr><td colspan="12" class="empty">没有符合条件的请求</td></tr>'; return; }
+    $('lRows').innerHTML = lItems.map(function (l) {
+      var sub = [protoOf(l.path), l.stream ? '流式' : '非流式', reasoningOf(l)].filter(Boolean).join(' · ');
+      var row = '<tr class="r' + (lOpenId === l.id ? ' open' : '') + '" data-id="' + l.id + '">'
+        + '<td>' + fmtLogTime(l.ts) + '</td>'
+        + '<td>' + esc(l.accountName || '-') + '</td>'
+        + '<td><span class="mono">' + esc(l.model || '-') + '</span><div class="sub">' + esc(sub) + '</div></td>'
+        + '<td>' + statusCell(l) + '</td>'
+        + '<td class="n' + (l.durationMs > 60000 ? ' slow' : '') + '">' + fmtMs(l.durationMs) + '</td>'
+        + '<td class="n' + (l.ttftMs > 5000 ? ' slow' : '') + '">' + fmtMs(l.ttftMs) + '</td>'
+        + '<td class="n">' + fmtTok(l.inputTokens) + '</td>'
+        + '<td class="n est">' + fmtTok(l.cacheReadTokens) + '</td>'
+        + '<td class="n est">' + fmtTok(l.cacheWriteTokens) + '</td>'
+        + '<td class="n">' + fmtTok(l.outputTokens) + '</td>'
+        + '<td class="n">' + fmtCredits(l.credits, 3) + '</td>'
+        + '<td>' + esc(clientOf(l.userAgent)) + '<div class="sub mono">' + esc(l.clientIp || '') + '</div></td>'
+        + '</tr>';
+      return lOpenId === l.id ? row + detailRow(l) : row;
+    }).join('');
+  }
+
+  function loadSummary() {
+    return api('GET', '/logs/summary' + logQuery(false)).then(renderCards);
+  }
+  function loadLogRows() {
+    return api('GET', '/logs' + logQuery(true)).then(function (r) {
+      var pages = Math.max(1, Math.ceil(r.total / L_PAGE));
+      if (lPage > pages - 1) { lPage = pages - 1; return loadLogRows(); }
+      lItems = r.items;
+      lTotal = r.total;
+      renderLogRows();
+    });
+  }
+  function logError(e) {
+    if (e.message !== 'unauthorized') $('lRows').innerHTML = '<tr><td colspan="12" class="empty">加载失败：' + esc(e.message) + '</td></tr>';
+  }
+  function loadLogs() {
+    var p = lFacetsLoaded ? Promise.resolve() : loadFacets();
+    return p.then(function () { return Promise.all([loadSummary(), loadLogRows()]); }).catch(logError);
+  }
+
+  function setView(v) {
+    view = v;
+    document.querySelectorAll('#nav button').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-view') === v); });
+    $('poolView').classList.toggle('hidden', v !== 'pool');
+    $('logsView').classList.toggle('hidden', v !== 'logs');
+    $('stats').classList.toggle('hidden', v !== 'pool');
+    $('refreshAll').classList.toggle('hidden', v !== 'pool');
+    try { history.replaceState(null, '', v === 'logs' ? '#logs' : location.pathname); } catch (e) {}
+    if (v === 'logs') { lFacetsLoaded = false; loadLogs(); } else load();
+  }
+  document.querySelectorAll('#nav button').forEach(function (b) {
+    b.addEventListener('click', function () { setView(b.getAttribute('data-view')); });
+  });
+  $('lRange').addEventListener('click', function (ev) {
+    var b = ev.target.closest('button'); if (!b) return;
+    lRange = b.getAttribute('data-range');
+    this.querySelectorAll('button').forEach(function (x) { x.classList.toggle('active', x === b); });
+    loadSummary().catch(logError);
+  });
+  ['lAccount', 'lModel'].forEach(function (id) {
+    $(id).addEventListener('change', function () { lPage = 0; lOpenId = null; loadLogs(); });
+  });
+  $('lStatus').addEventListener('change', function () { lPage = 0; lOpenId = null; loadLogRows().catch(logError); });
+  var searchTimer = null;
+  $('lSearch').addEventListener('input', function () {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () { lPage = 0; lOpenId = null; loadLogRows().catch(logError); }, 300);
+  });
+  $('lPrev').onclick = function () { if (lPage > 0) { lPage--; lOpenId = null; loadLogRows().catch(logError); } };
+  $('lNext').onclick = function () { lPage++; lOpenId = null; loadLogRows().catch(logError); };
+  $('lRefresh').onclick = function () { lFacetsLoaded = false; loadLogs(); };
+  $('lRows').addEventListener('click', function (ev) {
+    var tr = ev.target.closest('tr.r'); if (!tr) return;
+    var id = Number(tr.getAttribute('data-id'));
+    lOpenId = lOpenId === id ? null : id;
+    renderLogRows();
+  });
+
+  setInterval(function () {
+    if (!key || $('app').classList.contains('hidden')) return;
+    if (view === 'logs') { if ($('lAuto').checked && lOpenId === null) loadLogs(); } else load();
+  }, 15000);
   if (key) showApp(); else showAuth('');
 })();
 </script>

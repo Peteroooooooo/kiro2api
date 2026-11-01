@@ -11,6 +11,7 @@ import {
   ConversionError,
   type ConversionResult,
   convertRequest,
+  reasoningLogFields,
   responseThinkingEnabled,
   toKiroRequest,
 } from '../../claude/converter.js';
@@ -22,6 +23,7 @@ import type { MessagesRequest } from '../../claude/types.js';
 import { serializeKiroRequest } from '../../kiro/model/requests/kiro.js';
 import { getLogger } from '../../shared/logger.js';
 import { getRequestContext } from '../../shared/request-context.js';
+import { noteRequestLog } from '../../shared/request-log.js';
 import { countAllTokens } from '../../token.js';
 import { createOpenAiError } from '../types.js';
 import {
@@ -138,6 +140,7 @@ export function createPostResponses(deps: PostMessagesDeps) {
     }
 
     const kiroRequest = toKiroRequest(conversionResult);
+    noteRequestLog(reasoningLogFields(kiroRequest));
     let requestBody: string;
     try {
       requestBody = serializeKiroRequest(kiroRequest);
@@ -194,6 +197,8 @@ export function createPostResponses(deps: PostMessagesDeps) {
         reasoningModelId,
       );
     }
+
+    noteRequestLog({ emptyAttempts: result.emptyAttempts });
 
     if (result.emptyResponse && deps.captureEmptyDir) {
       captureEmptyRequest(deps.captureEmptyDir, {

@@ -16,6 +16,7 @@ import { countTokens, createPostMessages, getModels } from '../claude/handlers.j
 import type { KiroProvider } from '../kiro/provider.js';
 import type { HookBus } from '../plugin-host/index.js';
 import { createApiKeyAuthHook } from '../shared/auth-hook.js';
+import { withRequestLog } from '../shared/request-log.js';
 
 /** Maximum request body size (50 MB) */
 export const MAX_BODY_SIZE = 50 * 1024 * 1024;
@@ -71,6 +72,6 @@ export async function registerClaudeRoutes(
   const postMessagesHandler = createPostMessages(deps);
 
   fastify.get('/models', getModels);
-  fastify.post('/messages', { bodyLimit: MAX_BODY_SIZE }, postMessagesHandler);
+  fastify.post('/messages', { bodyLimit: MAX_BODY_SIZE }, withRequestLog(postMessagesHandler));
   fastify.post('/messages/count_tokens', { bodyLimit: MAX_BODY_SIZE }, countTokens);
 }

@@ -16,6 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { KiroProvider } from '../kiro/provider.js';
 import type { HookBus } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
+import { noteRequestErrorDetail, noteRequestLog } from '../shared/request-log.js';
 import { estimateOutputTokens } from '../token.js';
 import type { MessageHandlerResult } from './empty-capture.js';
 import { mapProviderError } from './error-mapper.js';
@@ -178,6 +179,7 @@ export async function handleNonStreamRequest(
         await hookBus.runUsageFinish(hookEvent);
       }
       const { status, errorType, message } = upstreamErrorWire(upstreamError.retryable);
+      noteRequestErrorDetail(`${upstreamError.code}: ${upstreamError.message}`);
       log.warn({
         msg: 'upstream sent mid-stream error frame (non-stream), surfacing error',
         upstream_error: upstreamError,
@@ -307,6 +309,8 @@ export async function handleNonStreamRequest(
       stop_sequence: null,
       usage,
     };
+
+    noteRequestLog({ stopReason, toolNames: toolUses.map((t) => String(t.name)) });
 
     log.info({
       msg: 'non-stream completed',

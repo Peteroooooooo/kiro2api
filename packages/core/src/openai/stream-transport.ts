@@ -31,6 +31,7 @@ import type { KiroProvider } from '../kiro/provider.js';
 import type { HookBus } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
+import { noteRequestError } from '../shared/request-log.js';
 import { mapProviderErrorOpenAi } from './error-mapper.js';
 import { createOpenAiError } from './types.js';
 
@@ -341,6 +342,7 @@ export async function runOpenAiStream<E extends StreamEncoder>(
   const upstreamError = ctx.getPendingUpstreamError();
   if (upstreamError) {
     const { status, errorType, message } = upstreamErrorWire(upstreamError.retryable);
+    noteRequestError(errorType, message, `${upstreamError.code}: ${upstreamError.message}`);
     const closeEvents =
       committed || ctx.kiroMeteringRaw ? await ctx.generateFinalEvents(false) : [];
     if (!committed) {
@@ -393,6 +395,7 @@ export async function runOpenAiStream<E extends StreamEncoder>(
       return { emptyResponse: false, emptyAttempts };
     }
     log.warn({ msg: 'openai: upstream empty stream after commit, in-band', ...logFields });
+    noteRequestError('overloaded_error', emptyMessage, 'empty upstream response');
     if (!aborted.value) {
       for (const line of protocol.inbandError(encoder, emptyMessage, 'overloaded_error')) {
         safeWrite(reply.raw, line);

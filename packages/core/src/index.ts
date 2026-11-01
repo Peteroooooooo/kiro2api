@@ -30,6 +30,8 @@ import { CapabilityRegistry, discoverPlugins, HookBus } from './plugin-host/inde
 import { AccountPool } from './pool/account-pool.js';
 import { AccountStore } from './pool/account-store.js';
 import { DeviceLoginManager } from './pool/device-login.js';
+import { entryFromDraft, RequestLogStore } from './request-log/store.js';
+import { requestLogUsage } from './request-log/usage.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerClaudeRoutes } from './routes/claude.js';
 import { registerHealthRoutes } from './routes/health.js';
@@ -42,6 +44,7 @@ import {
   getRequestContext,
   requestContextStorage,
 } from './shared/request-context.js';
+import { noteErrorResponseBody, noteRequestLog, setRequestLogSink } from './shared/request-log.js';
 import { initCountTokensConfig } from './token.js';
 
 /**
@@ -268,6 +271,35 @@ async function main(): Promise<void> {
     });
   }
 
+  // 4.5. 请求日志(/admin「请求日志」):号池 + 管理密钥时启用,每个模型请求一行元数据,不存正文。
+  let requestLog: RequestLogStore | undefined;
+  if (pool && config.adminKey && config.requestLogDays > 0) {
+    const file =
+      config.requestLogFile ??
+      path.join(path.dirname(path.resolve(config.accountsFile ?? 'accounts.json')), 'requests.db');
+    try {
+      const store = new RequestLogStore(file);
+      const accountPool = pool;
+      const retentionMs = config.requestLogDays * 86_400_000;
+      const prune = (): void => {
+        try {
+          store.prune(Date.now() - retentionMs);
+        } catch (e) {
+          logger.warn({ err: (e as Error).message }, 'request log prune failed');
+        }
+      };
+      prune();
+      setInterval(prune, 3_600_000).unref();
+      setRequestLogSink((draft) =>
+        store.insert(entryFromDraft(draft, (id) => accountPool.nameOf(id))),
+      );
+      requestLog = store;
+      logger.info(`请求日志：${store.filePath}，保留 ${config.requestLogDays} 天`);
+    } catch (e) {
+      logger.warn(`请求日志未启用：${(e as Error).message}`);
+    }
+  }
+
   // 5. 初始化 count_tokens 配置
   initCountTokensConfig({
     apiUrl: config.countTokensApiUrl,
@@ -315,6 +347,12 @@ async function main(): Promise<void> {
       });
     }
     done();
+  });
+
+  // 请求日志:记下 >= 400 响应体里的错误类型与(中性)文案。
+  app.addHook('onSend', (_request, reply, payload, done) => {
+    if (reply.statusCode >= 400 && typeof payload === 'string') noteErrorResponseBody(payload);
+    done(null, payload);
   });
 
   // 7. 路由注册
@@ -402,6 +440,7 @@ async function main(): Promise<void> {
       apiKey,
       pool,
       logins: new DeviceLoginManager(pool),
+      requestLog,
     };
     await app.register(
       async (instance) => {
@@ -470,6 +509,13 @@ async function main(): Promise<void> {
     );
   }
 
+  // 注册在所有插件之后:hook 按注册顺序执行,这样能读到 derived 插件覆写后的缓存拆分。
+  if (requestLog) {
+    hookBus.registerUsageFinish('core:request-log', (event) => {
+      noteRequestLog({ usage: requestLogUsage(event) });
+    });
+  }
+
   // 9. 启动服务器
   const addr = `${config.host}:${config.port}`;
   const maskedKey = `${apiKey.slice(0, Math.floor(apiKey.length / 2))}***`;
@@ -499,6 +545,7 @@ async function main(): Promise<void> {
     } catch (e) {
       logger.error(`关闭服务器失败: ${(e as Error).message}`);
     }
+    requestLog?.close();
     process.exit(0);
   };
 
