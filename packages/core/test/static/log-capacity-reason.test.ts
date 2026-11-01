@@ -64,7 +64,7 @@ describe('static guard: capacity_reason has one owner', () => {
 
     const owners = files
       .filter((f) => countFieldSites(fs.readFileSync(f, 'utf-8')) > 0)
-      .map((f) => path.relative(SRC_ROOT, f));
+      .map((f) => path.relative(SRC_ROOT, f).replaceAll(path.sep, '/'));
 
     expect(
       owners,

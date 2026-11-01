@@ -37,7 +37,7 @@ function runDockerScript({
   const callsPath = path.join(root, 'docker-calls.jsonl');
   fs.writeFileSync(
     path.join(root, 'bin/docker'),
-    `#!${process.execPath}
+    `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
@@ -70,7 +70,9 @@ if (args[0] === 'run') process.stdout.write('test-container-id\\n');
     cwd: os.tmpdir(),
     env: {
       ...cleanEnv,
-      PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}`,
+      PATH: [path.join(root, 'bin'), path.dirname(process.execPath), process.env.PATH].join(
+        path.delimiter,
+      ),
       DOCKER_CALLS_PATH: callsPath,
       ...env,
     },
