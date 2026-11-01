@@ -35,6 +35,9 @@
  *                        carries optional retryAfterSeconds from the upstream
  *                        Retry-After header (503 commonly ships one)
  * - `network`          — axios send error (no HTTP response)
+ * - `model_unavailable` — raised by the account pool, not the upstream: no enabled
+ *                        account's subscription offers the requested model, so
+ *                        nothing was sent
  */
 
 export type ProviderErrorKind =
@@ -53,7 +56,8 @@ export type ProviderErrorKind =
       retryAfterSeconds?: number;
     }
   | { kind: 'transient'; status: number; retryAfterSeconds?: number }
-  | { kind: 'network'; cause: unknown };
+  | { kind: 'network'; cause: unknown }
+  | { kind: 'model_unavailable'; model: string };
 
 export class ProviderError extends Error {
   readonly kind: ProviderErrorKind;
@@ -89,6 +93,8 @@ function defaultMessage(kind: ProviderErrorKind, body: string): string {
       return `Kiro API transient failure (HTTP ${kind.status}, retryAfter=${kind.retryAfterSeconds ?? 'n/a'}s): ${truncate(body)}`;
     case 'network':
       return `Kiro API network error: ${stringifyCause(kind.cause)}`;
+    case 'model_unavailable':
+      return `no enabled pool account offers model ${kind.model}`;
   }
 }
 

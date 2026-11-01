@@ -180,6 +180,8 @@ export async function registerAdminRoutes(
           if (!pool.update(request.params.id, { name: patchName, enabled })) {
             return fail(reply, 404, 'account not found');
           }
+          // A disabled account is skipped by the startup and periodic model queries.
+          if (enabled === true) void pool.refreshModels(request.params.id).catch(() => undefined);
           return { ok: true };
         },
       );
@@ -195,7 +197,7 @@ export async function registerAdminRoutes(
       api.post<IdParams>('/accounts/:id/quota', async (request, reply) => {
         if (!pool.has(request.params.id)) return fail(reply, 404, 'account not found');
         try {
-          return { quota: await pool.refreshQuota(request.params.id) };
+          return { quota: await pool.refreshAccount(request.params.id) };
         } catch (e) {
           return fail(reply, 502, e);
         }
@@ -205,7 +207,7 @@ export async function registerAdminRoutes(
         const results = await Promise.all(
           pool.list().map(async (a) => {
             try {
-              await pool.refreshQuota(a.id);
+              await pool.refreshAccount(a.id);
               return { id: a.id, ok: true };
             } catch (e) {
               return { id: a.id, ok: false, error: e instanceof Error ? e.message : String(e) };

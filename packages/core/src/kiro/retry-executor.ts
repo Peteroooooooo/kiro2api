@@ -100,6 +100,24 @@ export function extractAffinityKey(body: string): string | undefined {
 }
 
 /**
+ * Upstream model id of a conversation request (`currentMessage.userInputMessage.modelId`),
+ * so the pool only picks accounts whose plan offers it. MCP bodies have none.
+ */
+export function extractModelId(body: string): string | undefined {
+  try {
+    const state = (
+      JSON.parse(body) as {
+        conversationState?: { currentMessage?: { userInputMessage?: { modelId?: unknown } } };
+      }
+    ).conversationState;
+    const id = state?.currentMessage?.userInputMessage?.modelId;
+    return typeof id === 'string' && id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Per-request description. Three callers (main API, stream, MCP) each
  * build one of these and hand it to `RetryExecutor.execute()`.
  */
@@ -211,8 +229,9 @@ export class RetryExecutor {
    */
   async execute(req: RetryableRequest): Promise<AxiosResponse> {
     const affinityKey = extractAffinityKey(req.body);
+    const model = extractModelId(req.body);
     const exclude = new Set<string>();
-    const capacity = this.tokenManager.failoverCapacity();
+    const capacity = this.tokenManager.failoverCapacity(model);
 
     // Account failover (pool only): a failure scoped to one account moves the
     // request to another account. Everything sent so far was rejected before a
@@ -220,7 +239,7 @@ export class RetryExecutor {
     while (true) {
       const used: { ctx?: CallContext } = {};
       try {
-        const response = await this.executeOnAccount(req, { affinityKey, exclude }, used);
+        const response = await this.executeOnAccount(req, { affinityKey, exclude, model }, used);
         this.tokenManager.reportOutcome(used.ctx?.accountId, { kind: 'success' });
         return response;
       } catch (e) {
@@ -242,7 +261,7 @@ export class RetryExecutor {
 
   private async executeOnAccount(
     req: RetryableRequest,
-    opts: { affinityKey?: string; exclude: ReadonlySet<string> },
+    opts: { affinityKey?: string; exclude: ReadonlySet<string>; model?: string },
     used: { ctx?: CallContext },
   ): Promise<AxiosResponse> {
     const log = getLogger();

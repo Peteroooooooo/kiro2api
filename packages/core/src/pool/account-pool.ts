@@ -16,6 +16,10 @@
  * 3. An account that is disabled, cooling down, or excluded by the executor
  *    (it already failed this request) is skipped; a sticky conversation whose
  *    account became unusable moves once and sticks to the new account.
+ * 4. An account whose plan does not offer the requested model (its
+ *    ListAvailableModels list, refreshed at startup, on "查额度" and every few
+ *    hours) is skipped too. If no enabled account offers it, the request fails
+ *    with `model_unavailable` without reaching the upstream.
  *
  * ## Cooldowns
  *
@@ -89,6 +93,8 @@ export interface AccountView {
   cooldownReason?: string;
   tokenExpiresAt?: string;
   hasRefreshToken: boolean;
+  /** Upstream ids of the models the account's plan offers; absent until first queried. */
+  models?: readonly string[];
   stats: StoredAccount['stats'];
 }
 
@@ -111,6 +117,12 @@ export interface ExportedAccount {
 /** Name given to an account added without one, until its email is known. */
 export function placeholderName(id: string): string {
   return `account-${id}`;
+}
+
+/** Whether the account may serve `model`; an account whose list is not known yet is not filtered. */
+function offers(slot: Slot, model: string | undefined): boolean {
+  const models = slot.account.models;
+  return !model || !models || models.includes(model);
 }
 
 export class AccountPool implements TokenSource {
@@ -145,9 +157,9 @@ export class AccountPool implements TokenSource {
     return this.#config;
   }
 
-  failoverCapacity(): number {
+  failoverCapacity(model?: string): number {
     let n = 0;
-    for (const s of this.#slots.values()) if (s.account.enabled) n++;
+    for (const s of this.#slots.values()) if (s.account.enabled && offers(s, model)) n++;
     return Math.max(n, 1);
   }
 
@@ -155,10 +167,10 @@ export class AccountPool implements TokenSource {
     const skip = new Set(opts.exclude ?? []);
     let lastError: unknown;
     while (true) {
-      const slot = this.#pick(opts.affinityKey, skip);
+      const slot = this.#pick(opts.affinityKey, skip, opts.model);
       if (!slot) {
         if (lastError) throw lastError;
-        throw this.#noAccountError(skip);
+        throw this.#noAccountError(skip, opts.model);
       }
       try {
         const ctx = await slot.manager.acquireContext();
@@ -270,6 +282,7 @@ export class AccountPool implements TokenSource {
         cooldownReason: cooling ? s.cooldownReason : undefined,
         tokenExpiresAt: creds.expiresAt,
         hasRefreshToken: Boolean(creds.refreshToken),
+        models: s.account.models,
         stats: s.account.stats,
       };
     });
@@ -324,7 +337,7 @@ export class AccountPool implements TokenSource {
     this.#slots.set(id, slot);
     try {
       await slot.manager.acquireContext();
-      await this.refreshQuota(id).catch(() => undefined);
+      await this.refreshAccount(id).catch(() => undefined);
       return { id, verified: true };
     } catch (e) {
       this.#onRefreshFailure(slot, e);
@@ -358,6 +371,49 @@ export class AccountPool implements TokenSource {
     this.#slots.delete(id);
     for (const [k, v] of this.#affinity) if (v.id === id) this.#affinity.delete(k);
     return this.#store.remove(id);
+  }
+
+  /** Quota and model list together (the admin "查额度" action, startup, a new account). */
+  async refreshAccount(id: string): Promise<StoredAccount['quota']> {
+    const [quota] = await Promise.all([
+      this.refreshQuota(id),
+      this.refreshModels(id).catch(() => undefined),
+    ]);
+    return quota;
+  }
+
+  /**
+   * Query which models the account's plan offers. Requests for other models
+   * skip the account; until the first successful query it is not filtered.
+   */
+  async refreshModels(id: string): Promise<readonly string[]> {
+    const slot = this.#slots.get(id);
+    if (!slot) throw new Error(`unknown pool account: ${id}`);
+    let models: string[];
+    try {
+      models = [...new Set(await slot.manager.listAvailableModels())].sort();
+    } catch (e) {
+      getLogger().warn({
+        msg: 'pool account model list query failed',
+        account: id,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    }
+    const before = slot.account.models;
+    if (!before || before.join('\n') !== models.join('\n')) {
+      getLogger().info({
+        msg: 'pool account models updated',
+        account: id,
+        count: models.length,
+        added: before ? models.filter((m) => !before.includes(m)) : undefined,
+        removed: before?.filter((m) => !models.includes(m)),
+      });
+    }
+    slot.account.models = models;
+    slot.account.modelsCheckedAt = new Date().toISOString();
+    this.#store.saveNow();
+    return models;
   }
 
   /** Query the upstream quota (and account email) of one account. */
@@ -404,7 +460,7 @@ export class AccountPool implements TokenSource {
         .map(async (s) => {
           try {
             await s.manager.acquireContext();
-            await this.refreshQuota(s.account.id).catch(() => undefined);
+            await this.refreshAccount(s.account.id).catch(() => undefined);
           } catch (e) {
             this.#onRefreshFailure(s, e);
           }
@@ -412,14 +468,27 @@ export class AccountPool implements TokenSource {
     );
   }
 
+  /** Re-read the model list of every enabled account (plans change without notice). */
+  async refreshAllModels(): Promise<void> {
+    await Promise.all(
+      [...this.#slots.values()]
+        .filter((s) => s.account.enabled)
+        .map((s) => this.refreshModels(s.account.id).catch(() => undefined)),
+    );
+  }
+
   // ==========================================================================
   // Internals
   // ==========================================================================
 
-  #pick(affinityKey: string | undefined, skip: ReadonlySet<string>): Slot | undefined {
+  #pick(
+    affinityKey: string | undefined,
+    skip: ReadonlySet<string>,
+    model?: string,
+  ): Slot | undefined {
     const now = Date.now();
     const usable = (s: Slot) =>
-      s.account.enabled && s.cooldownUntil <= now && !skip.has(s.account.id);
+      s.account.enabled && s.cooldownUntil <= now && !skip.has(s.account.id) && offers(s, model);
     if (affinityKey) {
       const hit = this.#affinity.get(affinityKey);
       const slot = hit && now - hit.at < AFFINITY_TTL_MS ? this.#slots.get(hit.id) : undefined;
@@ -478,11 +547,15 @@ export class AccountPool implements TokenSource {
     this.#store.scheduleSave();
   }
 
-  #noAccountError(skip: ReadonlySet<string>): ProviderError {
+  #noAccountError(skip: ReadonlySet<string>, model?: string): ProviderError {
     const now = Date.now();
+    const enabled = [...this.#slots.values()].filter((s) => s.account.enabled);
+    if (model && enabled.length > 0 && !enabled.some((s) => offers(s, model))) {
+      return new ProviderError({ kind: 'model_unavailable', model }, '');
+    }
     let soonest = Number.POSITIVE_INFINITY;
-    for (const s of this.#slots.values()) {
-      if (s.account.enabled && !skip.has(s.account.id) && s.cooldownUntil > now) {
+    for (const s of enabled) {
+      if (offers(s, model) && !skip.has(s.account.id) && s.cooldownUntil > now) {
         soonest = Math.min(soonest, s.cooldownUntil);
       }
     }
