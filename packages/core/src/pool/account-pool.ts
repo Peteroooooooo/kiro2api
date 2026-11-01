@@ -108,20 +108,37 @@ export interface ExportedAccount {
   credentials: Omit<KiroCredentials, 'accessToken' | 'expiresAt'>;
 }
 
+/** Name given to an account added without one, until its email is known. */
+export function placeholderName(id: string): string {
+  return `account-${id}`;
+}
+
 export class AccountPool implements TokenSource {
   readonly #config: Config;
   readonly #store: AccountStore;
   readonly #slots = new Map<string, Slot>();
   readonly #affinity = new Map<string, { id: string; at: number }>();
+  readonly #renameListeners: ((id: string, from: string, to: string) => void)[] = [];
 
   constructor(config: Config, store: AccountStore, kiroCli?: LoadedCredentials) {
     this.#config = config;
     this.#store = store;
+    let renamed = false;
     for (const account of store.list()) {
       if (account.source === KIRO_CLI_ACCOUNT_ID) continue;
+      if (account.email && account.name === placeholderName(account.id)) {
+        account.name = account.email;
+        renamed = true;
+      }
       this.#slots.set(account.id, this.#makeSlot(account, this.#storePersistence(account.id)));
     }
+    if (renamed) store.saveNow();
     if (kiroCli) this.#attachKiroCli(kiroCli);
+  }
+
+  /** Called after an account's display name changes (admin rename, or placeholder → email). */
+  onRename(listener: (id: string, from: string, to: string) => void): void {
+    this.#renameListeners.push(listener);
   }
 
   config(): Config {
@@ -294,7 +311,7 @@ export class AccountPool implements TokenSource {
     const id = newAccountId();
     const account: StoredAccount = {
       id,
-      name: input.name?.trim() || `account-${id}`,
+      name: input.name?.trim() || placeholderName(id),
       enabled: true,
       createdAt: new Date().toISOString(),
       source: input.source,
@@ -318,7 +335,9 @@ export class AccountPool implements TokenSource {
   update(id: string, patch: { name?: string; enabled?: boolean }): boolean {
     const slot = this.#slots.get(id);
     if (!slot) return false;
-    if (patch.name?.trim()) slot.account.name = patch.name.trim();
+    const before = slot.account.name;
+    const name = patch.name?.trim();
+    if (name) slot.account.name = name;
     if (patch.enabled !== undefined) {
       slot.account.enabled = patch.enabled;
       if (patch.enabled) {
@@ -328,6 +347,7 @@ export class AccountPool implements TokenSource {
       }
     }
     this.#store.saveNow();
+    if (slot.account.name !== before) this.#emitRename(slot, before);
     return true;
   }
 
@@ -352,7 +372,11 @@ export class AccountPool implements TokenSource {
       checkedAt: new Date().toISOString(),
     };
     slot.account.quota = quota;
-    if (raw.userInfo?.email) slot.account.email = raw.userInfo.email;
+    const before = slot.account.name;
+    if (raw.userInfo?.email) {
+      slot.account.email = raw.userInfo.email;
+      if (before === placeholderName(id)) slot.account.name = raw.userInfo.email;
+    }
     if (raw.subscriptionInfo?.subscriptionTitle) {
       slot.account.subscription = raw.subscriptionInfo.subscriptionTitle;
     }
@@ -368,6 +392,7 @@ export class AccountPool implements TokenSource {
       slot.cooldownReason = undefined;
     }
     this.#store.saveNow();
+    if (slot.account.name !== before) this.#emitRename(slot, before);
     return quota;
   }
 
@@ -413,6 +438,16 @@ export class AccountPool implements TokenSource {
     if (this.#affinity.size > AFFINITY_MAX) {
       const oldest = this.#affinity.keys().next().value;
       if (oldest !== undefined) this.#affinity.delete(oldest);
+    }
+  }
+
+  #emitRename(slot: Slot, from: string): void {
+    for (const listener of this.#renameListeners) {
+      try {
+        listener(slot.account.id, from, slot.account.name);
+      } catch (e) {
+        getLogger().warn({ msg: 'account rename listener failed', error: String(e) });
+      }
     }
   }
 

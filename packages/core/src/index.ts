@@ -27,7 +27,7 @@ import type { TokenSource } from './kiro/token-source.js';
 import { loadConfigFromEnv } from './model/config.js';
 import { DEFAULT_GPT_CONTEXT_WINDOW } from './model/schemas/config-schema.js';
 import { CapabilityRegistry, discoverPlugins, HookBus } from './plugin-host/index.js';
-import { AccountPool } from './pool/account-pool.js';
+import { AccountPool, placeholderName } from './pool/account-pool.js';
 import { AccountStore } from './pool/account-store.js';
 import { DeviceLoginManager } from './pool/device-login.js';
 import { entryFromDraft, RequestLogStore } from './request-log/store.js';
@@ -290,6 +290,15 @@ async function main(): Promise<void> {
       };
       prune();
       setInterval(prune, 3_600_000).unref();
+      const rename = (id: string, from: string, to: string): void => {
+        try {
+          store.renameAccount(id, from, to);
+        } catch (e) {
+          logger.warn({ err: (e as Error).message }, 'request log rename failed');
+        }
+      };
+      for (const a of accountPool.list()) rename(a.id, placeholderName(a.id), a.name);
+      accountPool.onRename(rename);
       setRequestLogSink((draft) =>
         store.insert(entryFromDraft(draft, (id) => accountPool.nameOf(id))),
       );

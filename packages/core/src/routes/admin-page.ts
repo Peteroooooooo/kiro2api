@@ -248,7 +248,7 @@ a { color: var(--accent); }
       </div>
 
       <div data-pane="builder">
-        <div class="row"><label>备注名</label><input id="bName" placeholder="可选，例如 学校邮箱"></div>
+        <div class="row"><label>备注名</label><input id="bName" placeholder="可选，留空就用账号邮箱"></div>
         <button class="primary" id="bStart">开始登录</button>
         <p class="hint">点击后会给出一个验证码和链接。用任意浏览器打开链接、登录 AWS Builder ID 并确认，页面会自动完成添加。</p>
       </div>
@@ -256,7 +256,7 @@ a { color: var(--accent); }
       <div data-pane="idc" class="hidden">
         <div class="row"><label>Start URL</label><input id="iUrl" placeholder="https://xxx.awsapps.com/start"></div>
         <div class="row"><label>Region</label><input id="iRegion" value="us-east-1"></div>
-        <div class="row"><label>备注名</label><input id="iName" placeholder="可选"></div>
+        <div class="row"><label>备注名</label><input id="iName" placeholder="可选，留空就用账号邮箱"></div>
         <button class="primary" id="iStart">开始登录</button>
         <p class="hint">企业或学校的 IAM Identity Center 账号。Start URL 和 Region 由管理员提供。</p>
       </div>
@@ -397,7 +397,10 @@ a { color: var(--accent); }
         q = fmtNum(a.quota.current) + ' / ' + fmtNum(a.quota.limit) + '<div class="bar"><i style="width:' + pct.toFixed(1) + '%"></i></div>'
           + '<div class="sub">查询于 ' + fmtTime(a.quota.checkedAt) + '</div>';
       }
-      var name = '<b>' + esc(a.name) + '</b><div class="sub">' + esc(a.email || a.id) + (a.subscription ? ' · ' + esc(a.subscription) : '') + '</div>';
+      var subParts = [];
+      if (a.email && a.email !== a.name) subParts.push(esc(a.email));
+      if (a.subscription) subParts.push(esc(a.subscription));
+      var name = '<b>' + esc(a.name) + '</b>' + (subParts.length ? '<div class="sub">' + subParts.join(' · ') + '</div>' : '');
       var acts = '<div class="acts">'
         + '<label class="switch" title="' + (a.enabled ? '已启用，点击停用' : '已停用，点击启用') + '">'
         + '<input type="checkbox" data-act="toggle" data-id="' + esc(a.id) + '"' + (a.enabled ? ' checked' : '') + ' aria-label="启用 ' + esc(a.name) + '">'
