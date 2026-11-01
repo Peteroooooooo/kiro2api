@@ -24,6 +24,7 @@ export const ADMIN_PAGE_HTML = `<!doctype html>
   }
 }
 * { box-sizing: border-box; }
+html { overflow-y: scroll; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; }
@@ -584,6 +585,12 @@ a { color: var(--accent); }
   }
 
   function renderCards(s) {
+    if (!s) {
+      $('lCards').innerHTML = ['请求数', '输入', '缓存读 ≈', '缓存写 ≈', '输出', 'credits', '平均耗时'].map(function (k) {
+        return '<div class="card"><div class="k">' + k + '</div><div class="v">-</div><div class="s">&nbsp;</div></div>';
+      }).join('');
+      return;
+    }
     var totalIn = s.inputTokens + s.cacheReadTokens + s.cacheWriteTokens;
     var cards = [
       ['请求数', s.requests.toLocaleString(), '成功 ' + (s.requests - s.failed) + ' · 失败 ' + s.failed],
@@ -700,14 +707,17 @@ a { color: var(--accent); }
     document.querySelectorAll('#nav button').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-view') === v); });
     $('poolView').classList.toggle('hidden', v !== 'pool');
     $('logsView').classList.toggle('hidden', v !== 'logs');
-    $('stats').classList.toggle('hidden', v !== 'pool');
-    $('refreshAll').classList.toggle('hidden', v !== 'pool');
+    // visibility, not display: the header keeps its size, so nothing in it moves between views.
+    $('stats').style.visibility = v === 'pool' ? '' : 'hidden';
+    $('refreshAll').style.visibility = v === 'pool' ? '' : 'hidden';
     try { history.replaceState(null, '', v === 'logs' ? '#logs' : location.pathname); } catch (e) {}
     if (v === 'logs') { lFacetsLoaded = false; loadLogs(); } else load();
   }
   document.querySelectorAll('#nav button').forEach(function (b) {
     b.addEventListener('click', function () { setView(b.getAttribute('data-view')); });
   });
+  renderCards();
+  $('lRows').innerHTML = '<tr><td colspan="12" class="empty">加载中…</td></tr>';
   $('lRange').addEventListener('click', function (ev) {
     var b = ev.target.closest('button'); if (!b) return;
     lRange = b.getAttribute('data-range');
