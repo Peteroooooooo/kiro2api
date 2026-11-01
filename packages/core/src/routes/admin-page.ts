@@ -276,9 +276,10 @@ a { color: var(--accent); }
       </div>
 
       <div id="loginBox" class="login-box hidden">
-        <div>在浏览器打开：<a id="loginLink" target="_blank" rel="noopener noreferrer"></a></div>
-        <div>确认验证码：</div>
-        <div class="code" id="loginCode"></div>
+        <div>用任意浏览器打开这个链接（点开或复制都行）：</div>
+        <div class="conn-value"><a id="loginLink" target="_blank" rel="noopener noreferrer" style="word-break:break-all"></a><button data-copy="loginLink">复制链接</button></div>
+        <div style="margin-top:8px">确认验证码：</div>
+        <div class="conn-value"><div class="code" id="loginCode"></div><button data-copy="loginCode">复制</button></div>
         <div class="sub" id="loginState"></div>
         <button id="loginCancel" style="margin-top:8px">取消</button>
       </div>
@@ -646,7 +647,6 @@ a { color: var(--accent); }
       $('loginLink').href = link; $('loginLink').textContent = link;
       $('loginCode').textContent = s.userCode;
       $('loginBox').classList.remove('hidden');
-      try { window.open(link, '_blank', 'noopener'); } catch (e) {}
       pollLogin();
     }).catch(function (e) { stopLogin(); setMsg('无法开始登录：' + e.message); });
   }
