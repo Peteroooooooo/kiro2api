@@ -115,7 +115,7 @@ table.logs tr.detail td { background: var(--row-hover); white-space: normal; pad
 .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; color: var(--muted); }
 th.act, td.act { width: 1%; white-space: nowrap; text-align: right; }
 .acts { display: inline-flex; gap: 10px; align-items: center; }
-.models { cursor: help; border-bottom: 1px dotted currentColor; }
+.mcount { cursor: help; border-bottom: 1px dotted currentColor; }
 .acts .more { padding: 3px 8px; font-size: 12px; font-weight: 700; letter-spacing: 1px; line-height: 1.2; }
 .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; cursor: pointer; }
 .switch input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; cursor: pointer; }
@@ -401,7 +401,7 @@ a { color: var(--accent); }
       var subParts = [];
       if (a.email && a.email !== a.name) subParts.push(esc(a.email));
       if (a.subscription) subParts.push(esc(a.subscription));
-      if (a.models) subParts.push('<span class="models" title="' + esc('可用模型：' + a.models.join('、')) + '">' + a.models.length + ' 个模型</span>');
+      if (a.models) subParts.push('<span class="mcount" title="' + esc('可用模型：' + a.models.join('、')) + '">' + a.models.length + ' 个模型</span>');
       var name = '<b>' + esc(a.name) + '</b>' + (subParts.length ? '<div class="sub">' + subParts.join(' · ') + '</div>' : '');
       var acts = '<div class="acts">'
         + '<label class="switch" title="' + (a.enabled ? '已启用，点击停用' : '已停用，点击启用') + '">'
