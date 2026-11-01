@@ -117,7 +117,7 @@ th.act, td.act { width: 1%; white-space: nowrap; text-align: right; }
 .acts { display: inline-flex; gap: 10px; align-items: center; }
 .acts .more { padding: 3px 8px; font-size: 12px; font-weight: 700; letter-spacing: 1px; line-height: 1.2; }
 .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; cursor: pointer; }
-.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; cursor: pointer; }
 .switch .track { position: absolute; inset: 0; border-radius: 999px; background: var(--bar); transition: background .15s; }
 .switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
