@@ -30,7 +30,7 @@ describe('Claude Code harness gateway probe', { timeout: 30_000 }, () => {
     );
     fs.writeFileSync(path.join(harness, 'VERSION'), '1.2.3\n');
     const callsPath = path.join(root, 'calls.jsonl');
-    const stub = `#!${process.execPath}
+    const stub = `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
 const command = path.basename(process.argv[1]);
@@ -59,7 +59,7 @@ if (command === 'docker' && args[0] === 'run') process.stdout.write('1.2.3 (Clau
         env: {
           ...process.env,
           CLAUDE_CODE_VERSION: '1.2.3',
-          PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+          PATH: [bin, path.dirname(process.execPath), process.env.PATH].join(path.delimiter),
           TMPDIR: root,
           CALLS_PATH: callsPath,
           EXPECT_HEALTH: health,

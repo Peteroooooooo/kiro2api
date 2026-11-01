@@ -64,7 +64,7 @@ describe('static guard: metering log fields have one constructor', () => {
 
       const owners = files
         .filter((f) => countFieldSites(fs.readFileSync(f, 'utf-8'), field) > 0)
-        .map((f) => path.relative(SRC_ROOT, f));
+        .map((f) => path.relative(SRC_ROOT, f).replaceAll(path.sep, '/'));
 
       expect(
         owners,
@@ -88,7 +88,7 @@ describe('static guard: metering log fields have one constructor', () => {
       const hits = (
         stripComments(fs.readFileSync(f, 'utf-8')).match(/\.\.\.buildMeteringLogFields\(/g) ?? []
       ).length;
-      return hits > 0 ? [`${path.relative(SRC_ROOT, f)}:${hits}`] : [];
+      return hits > 0 ? [`${path.relative(SRC_ROOT, f).replaceAll(path.sep, '/')}:${hits}`] : [];
     });
 
     expect(spreadSites.sort()).toEqual([
