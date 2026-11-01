@@ -168,6 +168,24 @@ describe('RequestLogStore', () => {
     expect(store.prune(2_000)).toBe(1);
     expect(store.list({}, 10, 0).items.map((i) => i.ts)).toEqual([5_000]);
   });
+
+  it('renameAccount rewrites past rows of that account, accounts tried included', () => {
+    store.insert(entry({ ts: 1_000, accountId: 'a1', accountName: 'account-a1' }));
+    store.insert(
+      entry({
+        ts: 2_000,
+        accountId: 'b2',
+        accountName: 'b@example.com',
+        accountsTried: ['account-a1', 'b@example.com'],
+      }),
+    );
+    expect(store.renameAccount('a1', 'account-a1', 'a@example.com')).toBe(1);
+    const [newer, older] = store.list({}, 10, 0).items;
+    expect(older?.accountName).toBe('a@example.com');
+    expect(newer?.accountName).toBe('b@example.com');
+    expect(newer?.accountsTried).toEqual(['a@example.com', 'b@example.com']);
+    expect(store.renameAccount('a1', 'account-a1', 'a@example.com')).toBe(0);
+  });
 });
 
 describe('entryFromDraft', () => {

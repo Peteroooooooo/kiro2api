@@ -326,6 +326,26 @@ export class RequestLogStore {
     };
   }
 
+  /**
+   * Point past rows of an account at its new name: `account_name` by id, and
+   * `from` inside `accounts_tried` (which keeps names only).
+   */
+  renameAccount(id: string, from: string, to: string): number {
+    const named = this.#db
+      .prepare(
+        'UPDATE requests SET account_name = ? WHERE account_id = ? AND account_name IS NOT ?',
+      )
+      .run(to, id, to).changes;
+    if (from !== to) {
+      this.#db
+        .prepare(`
+          UPDATE requests SET accounts_tried = replace(accounts_tried, json_quote(@from), json_quote(@to))
+          WHERE accounts_tried IS NOT NULL AND instr(accounts_tried, json_quote(@from)) > 0`)
+        .run({ from, to });
+    }
+    return named;
+  }
+
   /** Delete rows that started before `cutoff`; returns the number removed. */
   prune(cutoff: number): number {
     return this.#db.prepare('DELETE FROM requests WHERE ts < ?').run(cutoff).changes;
