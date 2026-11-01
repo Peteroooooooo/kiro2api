@@ -231,6 +231,9 @@ async function main(): Promise<void> {
       await pool.warmup();
       const usable = pool.list().filter((a) => a.status === 'ok').length;
       logger.info(`启动自检完成：号池 ${usable}/${pool.list().length} 个账号可用`);
+      // 订阅会在后台变(升级 / 到期降为免费),可用模型跟着变:每 6 小时重查一次。
+      const accountPool = pool;
+      setInterval(() => void accountPool.refreshAllModels(), 6 * 3_600_000).unref();
     } else {
       await tokenManager.acquireContext();
       logger.info('启动自检完成：凭据就绪');

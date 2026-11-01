@@ -41,6 +41,9 @@ export interface StoredAccount {
   email?: string;
   subscription?: string;
   quota?: AccountQuota;
+  /** Upstream ids of the models the plan offers (ListAvailableModels); absent = not queried yet. */
+  models?: string[];
+  modelsCheckedAt?: string;
   /** Why the pool disabled the account on its own (cleared when re-enabled). */
   disabledReason?: string;
   stats: AccountStats;

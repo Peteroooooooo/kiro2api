@@ -178,6 +178,16 @@ export function classifyProviderError(err: unknown): ClassifiedProviderError {
           errorType: 'api_error',
           message: 'Service is unreachable. Please retry.',
         };
+      case 'model_unavailable':
+        // Retrying cannot help until an account with that plan is added, so a
+        // 4xx (no client backoff), and the model id is the upstream one, so it
+        // stays in the log.
+        log.warn({ msg: 'no pool account offers the requested model', model: err.kind.model });
+        return {
+          status: 404,
+          errorType: 'not_found_error',
+          message: 'The requested model is not available on this service.',
+        };
       default:
         // A new `ProviderErrorKind` variant that isn't handled above is a tsc
         // error here. Without this arm the switch would just fall through to

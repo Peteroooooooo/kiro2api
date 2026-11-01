@@ -2,7 +2,7 @@
  * Kiro CLI 客户端画像（client profile）
  *
  * 集中管理 kiro2claude 向上游模拟 kiro-cli `chat --v3` 时使用的请求形态,分两个身份:
- * - `kas`:KAS(对话子进程)发的 GAR / InvokeMCP——头、UA 模板、target、body 语义字段
+ * - `kas`:KAS(对话子进程)发的 GAR / InvokeMCP / ListAvailableModels——头、UA 模板、target、body 语义字段
  *   (origin / agentMode / agentTaskType / chatTriggerType)
  * - `shell`:Rust 外壳发的 GetUsageLimits
  *
@@ -31,7 +31,7 @@ import { expandTilde, findUpwards } from '../shared/paths.js';
 // 类型
 // ---------------------------------------------------------------------------
 
-/** KAS 发出的请求 → x-amz-target。网关只发前两个;其余随抓包保留,供对照。 */
+/** KAS 发出的请求 → x-amz-target。网关发 GAR、InvokeMCP 和号池用的 ListAvailableModels;其余随抓包保留,供对照。 */
 export type KasTargetKey =
   | 'generateAssistantResponse'
   | 'invokeMcp'
@@ -56,6 +56,16 @@ export interface KasIdentity {
   userAgent: string;
   xAmzUserAgent: string;
   amzTargets: Partial<Record<KasTargetKey, string>>;
+  /**
+   * 控制面(`management.{region}.kiro.dev`,ListAvailableModels)的头与 UA,取自抓包里的
+   * ListAvailableModels 样本:UA 的 `api/` 段与 GAR 不同,也不带 optout / attribution 头
+   * (这个请求不携带任何对话内容)。
+   */
+  controlPlane: {
+    staticHeaders: Record<string, string>;
+    userAgent: string;
+    xAmzUserAgent: string;
+  };
   /** body 里的语义字段 */
   body: {
     origin: string;
@@ -125,6 +135,17 @@ const FALLBACK_PROFILE: KiroClientProfile = {
     amzTargets: {
       generateAssistantResponse: 'KiroRuntimeService.GenerateAssistantResponse',
       invokeMcp: 'KiroRuntimeService.InvokeMCP',
+      listAvailableModels: 'KiroControlPlaneBearerService.ListAvailableModels',
+    },
+    controlPlane: {
+      staticHeaders: {
+        'content-type': 'application/x-amz-json-1.0',
+        connection: 'keep-alive',
+      },
+      userAgent:
+        'aws-sdk-js/1.0.0 ua/2.1 os/{jsOs} lang/js md/nodejs#22.22.2 api/kirocontrolplanebearer#1.0.0 m/N,E KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli',
+      xAmzUserAgent:
+        'aws-sdk-js/1.0.0 KiroCLI/2.34.0 KAS/0.66.62 os/{platform} md/appVersion-2.34.0 app/AmazonQ-For-CLI acp-client/kiro-cli',
     },
     body: {
       origin: 'KIRO_CLI',
@@ -182,6 +203,11 @@ function normalizeProfileOs(profile: KiroClientProfile): KiroClientProfile {
       ...profile.kas,
       userAgent: normalizeKasUa(profile.kas.userAgent),
       xAmzUserAgent: normalizeKasUa(profile.kas.xAmzUserAgent),
+      controlPlane: {
+        ...profile.kas.controlPlane,
+        userAgent: normalizeKasUa(profile.kas.controlPlane.userAgent),
+        xAmzUserAgent: normalizeKasUa(profile.kas.controlPlane.xAmzUserAgent),
+      },
     },
     shell: {
       ...profile.shell,
@@ -219,6 +245,41 @@ const SHELL_SERVICE_ID = 'codewhispererruntime';
 const asStringRecord = (v: unknown): Record<string, string> | undefined =>
   v && typeof v === 'object' ? (v as Record<string, string>) : undefined;
 const asString = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+
+/** Per-request headers the gateway sets itself; everything else in a sample is static. */
+const DYNAMIC_SAMPLE_HEADERS = new Set([
+  'x-amz-target',
+  'user-agent',
+  'x-amz-user-agent',
+  'authorization',
+  'host',
+  'amz-sdk-invocation-id',
+  'amz-sdk-request',
+]);
+
+/** 抓包 `samples` 里的 KAS ListAvailableModels 样本 → 控制面头;缺样本时用内置快照。 */
+function parseControlPlane(
+  samples: unknown,
+  target: string | undefined,
+): KasIdentity['controlPlane'] {
+  const fb = FALLBACK_PROFILE.kas.controlPlane;
+  const sample = Array.isArray(samples)
+    ? (samples as Record<string, unknown>[]).find(
+        (s) => s && s.engine === 'kas' && s.target === target,
+      )
+    : undefined;
+  const headers = asStringRecord(sample?.headers);
+  if (!headers) return fb;
+  const staticHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (typeof v === 'string' && !DYNAMIC_SAMPLE_HEADERS.has(k.toLowerCase())) staticHeaders[k] = v;
+  }
+  return {
+    staticHeaders,
+    userAgent: asString(headers['user-agent']) ?? fb.userAgent,
+    xAmzUserAgent: asString(headers['x-amz-user-agent']) ?? fb.xAmzUserAgent,
+  };
+}
 
 /**
  * 把 capture 脚本产出的原始 JSON 规范化为 `KiroClientProfile`。
@@ -261,6 +322,7 @@ function parseCaptured(raw: unknown): KiroClientProfile {
       userAgent: asString(kasRaw.userAgent) ?? fb.kas.userAgent,
       xAmzUserAgent: asString(kasRaw.xAmzUserAgent) ?? fb.kas.xAmzUserAgent,
       amzTargets,
+      controlPlane: parseControlPlane(obj.samples, amzTargets.listAvailableModels),
       body: {
         origin: asString(bodyRaw.origin) ?? fb.kas.body.origin,
         agentMode: asString(bodyRaw.agentMode) ?? fb.kas.body.agentMode,
@@ -371,6 +433,14 @@ export function renderKasUserAgent(profile: KiroClientProfile): string {
 
 export function renderKasXAmzUserAgent(profile: KiroClientProfile): string {
   return renderPlaceholders(profile.kas.xAmzUserAgent);
+}
+
+export function renderControlPlaneUserAgent(profile: KiroClientProfile): string {
+  return renderPlaceholders(profile.kas.controlPlane.userAgent);
+}
+
+export function renderControlPlaneXAmzUserAgent(profile: KiroClientProfile): string {
+  return renderPlaceholders(profile.kas.controlPlane.xAmzUserAgent);
 }
 
 export function renderShellUserAgent(profile: KiroClientProfile): string {

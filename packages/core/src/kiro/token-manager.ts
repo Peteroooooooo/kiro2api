@@ -14,8 +14,11 @@ import { getLogger, logger } from '../shared/logger.js';
 import { extractRetryAfter } from '../shared/retry-after.js';
 import {
   getKiroClientProfile,
+  renderControlPlaneUserAgent,
+  renderControlPlaneXAmzUserAgent,
   renderShellUserAgent,
   renderShellXAmzUserAgent,
+  requireKasTarget,
 } from './client-profile.js';
 import type { KiroCredentials } from './model/credentials.js';
 import {
@@ -332,6 +335,61 @@ export async function getUsageLimits(
   return response.data as UsageLimitsResponse;
 }
 
+/**
+ * 当前凭据能用的模型(上游 id,如 `claude-opus-5.5`)。走 KAS 控制面
+ * `management.{region}.kiro.dev` 的 ListAvailableModels,形态取自抓包样本
+ * (`profile.kas.controlPlane`);不计费。订阅不同,列表不同(免费账号没有 Opus 等)。
+ */
+export async function listAvailableModels(
+  credentials: KiroCredentials,
+  config: Config,
+  token: string,
+): Promise<string[]> {
+  const region = credentialEffectiveApiRegion(credentials, config);
+  const host = `management.${region}.kiro.dev`;
+  const profile = getKiroClientProfile();
+  const headers: Record<string, string | false> = {
+    accept: false,
+    'accept-encoding': false,
+    ...profile.kas.controlPlane.staticHeaders,
+    'x-amz-target': requireKasTarget(profile, 'listAvailableModels'),
+    'user-agent': renderControlPlaneUserAgent(profile),
+    'x-amz-user-agent': renderControlPlaneXAmzUserAgent(profile),
+    host,
+    Authorization: `Bearer ${token}`,
+  };
+  // 本端点没有 `x-kiro-attempt` 的抓包证据,故不发(同 GetUsageLimits)。
+  applyRetryHeaders(headers, uuidv4(), 1, { kiroAttemptHeader: false });
+  const body = {
+    origin: profile.kas.body.origin,
+    ...(credentials.profileArn ? { profileArn: credentials.profileArn } : {}),
+  };
+
+  const response = await axios.create({ timeout: 30_000 }).post(`https://${host}/`, body, {
+    headers,
+    validateStatus: () => true,
+  });
+  const status = response.status;
+  if (status < 200 || status >= 300) {
+    const bodyText =
+      typeof response.data === 'string' ? response.data : JSON.stringify(response.data ?? '');
+    const retryAfter = extractRetryAfter(response.headers);
+    getLogger().error({
+      msg: 'upstream http error',
+      endpoint: 'listAvailableModels',
+      upstream_status: status,
+      upstream_body: bodyText,
+      upstream_retry_after: retryAfter,
+    });
+    throw new KiroHttpError(status, 'Failed to list available models', bodyText, retryAfter);
+  }
+  const models = (response.data as { models?: unknown } | undefined)?.models;
+  if (!Array.isArray(models)) throw new Error('ListAvailableModels response has no models array');
+  return models
+    .map((m) => (m && typeof m === 'object' ? (m as { modelId?: unknown }).modelId : undefined))
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
 // ============================================================================
 // AsyncMutex —— 基于 Promise 的互斥锁，给刷新流程用
 // ============================================================================
@@ -505,6 +563,12 @@ export class SingleTokenManager implements TokenSource {
   async getUsageLimits(): Promise<UsageLimitsResponse> {
     const ctx = await this.acquireContext();
     return await getUsageLimits(ctx.credentials, this._config, ctx.token);
+  }
+
+  /** 当前凭据能用的模型(上游 id)。先确保 token 新鲜。 */
+  async listAvailableModels(): Promise<string[]> {
+    const ctx = await this.acquireContext();
+    return await listAvailableModels(ctx.credentials, this._config, ctx.token);
   }
 
   // ========================================================================

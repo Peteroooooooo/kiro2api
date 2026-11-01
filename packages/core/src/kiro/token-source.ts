@@ -29,6 +29,8 @@ export interface AcquireOptions {
   affinityKey?: string;
   /** Accounts that already failed this request and must not be picked again. */
   exclude?: ReadonlySet<string>;
+  /** Upstream model id; a pool only picks accounts whose plan offers it. */
+  model?: string;
 }
 
 /**
@@ -48,7 +50,7 @@ export interface TokenSource {
   /** Force-refresh the bearer of `accountId` (or the only credential). */
   forceRefreshToken(accountId?: string): Promise<void>;
   getUsageLimits(): Promise<UsageLimitsResponse>;
-  /** Number of accounts a request may fail over across. 1 = no failover. */
-  failoverCapacity(): number;
+  /** Number of accounts a request for `model` may fail over across. 1 = no failover. */
+  failoverCapacity(model?: string): number;
   reportOutcome(accountId: string | undefined, outcome: AccountOutcome): void;
 }
