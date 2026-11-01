@@ -9,6 +9,7 @@ import type { Event, KiroMeteringData } from '../kiro/model/events/base.js';
 import { type HookBus, UsageFinishEventImpl } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
+import { noteFirstToken, noteRequestLog } from '../shared/request-log.js';
 import { clientModelHasEncryptedReasoning, mapModel, resolveContextUsage } from './converter.js';
 import {
   type LegacyThinkingBoundaryReason,
@@ -1045,6 +1046,14 @@ export class StreamContext {
       return [];
     }
 
+    if (
+      event.kind === 'AssistantResponse' ||
+      event.kind === 'ReasoningContent' ||
+      event.kind === 'ToolUse'
+    ) {
+      noteFirstToken();
+    }
+
     switch (event.kind) {
       case 'AssistantResponse':
         return this.processAssistantResponse(event.content);
@@ -1693,6 +1702,10 @@ export class StreamContext {
         ? this.stateManager.generateFinalEvents(finalInputTokens, this.outputTokens, hookEvent)
         : this.stateManager.closeOpenBlocks()),
     );
+    noteRequestLog({
+      stopReason: emitMessageTerminal ? this.stateManager.getStopReason() : undefined,
+      toolNames: [...this.seenToolUseNames],
+    });
 
     getLogger().debug({
       msg: 'stream statistics',

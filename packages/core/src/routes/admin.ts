@@ -10,6 +10,7 @@ import { MODELS } from '../claude/models-catalog.js';
 import type { AccountPool } from '../pool/account-pool.js';
 import type { DeviceLoginManager } from '../pool/device-login.js';
 import { parseImport } from '../pool/import-credentials.js';
+import type { RequestLogFilter, RequestLogStore } from '../request-log/store.js';
 import { createApiKeyAuthHook } from '../shared/auth-hook.js';
 import { ADMIN_PAGE_HTML } from './admin-page.js';
 
@@ -19,6 +20,41 @@ export interface AdminRouteDeps {
   apiKey: string;
   pool: AccountPool;
   logins: DeviceLoginManager;
+  /** Absent when the request log is off (`KIRO2CLAUDE_REQUEST_LOG_DAYS=0` or the file could not be opened). */
+  requestLog?: RequestLogStore;
+}
+
+type LogQuery = {
+  Querystring: {
+    since?: string;
+    until?: string;
+    account?: string;
+    model?: string;
+    status?: string;
+    q?: string;
+    limit?: string;
+    offset?: string;
+  };
+};
+
+function intParam(v: string | undefined, fallback: number, min: number, max: number): number {
+  const n = v === undefined || v === '' ? Number.NaN : Number(v);
+  return Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), min), max) : fallback;
+}
+
+function logFilter(q: LogQuery['Querystring']): RequestLogFilter {
+  const time = (v: string | undefined) => {
+    const n = v === undefined || v === '' ? Number.NaN : Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  return {
+    since: time(q.since),
+    until: time(q.until),
+    accountId: q.account || undefined,
+    model: q.model || undefined,
+    status: q.status === 'ok' || q.status === 'error' ? q.status : undefined,
+    q: q.q?.trim() ? q.q.trim().slice(0, 200) : undefined,
+  };
 }
 
 type IdParams = { Params: { id: string } };
@@ -73,7 +109,26 @@ export async function registerAdminRoutes(
       api.get('/connection', async () => ({
         apiKey: deps.apiKey,
         models: MODELS.map((m) => m.id),
+        requestLog: deps.requestLog !== undefined,
       }));
+
+      api.get<LogQuery>('/logs', async (request, reply) => {
+        if (!deps.requestLog) return fail(reply, 404, 'request log is disabled');
+        const q = request.query ?? {};
+        const limit = intParam(q.limit, 50, 1, 200);
+        const offset = intParam(q.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+        return deps.requestLog.list(logFilter(q), limit, offset);
+      });
+
+      api.get<LogQuery>('/logs/summary', async (request, reply) => {
+        if (!deps.requestLog) return fail(reply, 404, 'request log is disabled');
+        return deps.requestLog.summary(logFilter(request.query ?? {}));
+      });
+
+      api.get('/logs/facets', async (_request, reply) => {
+        if (!deps.requestLog) return fail(reply, 404, 'request log is disabled');
+        return deps.requestLog.facets();
+      });
 
       api.get('/accounts', async () => ({ accounts: pool.list() }));
 

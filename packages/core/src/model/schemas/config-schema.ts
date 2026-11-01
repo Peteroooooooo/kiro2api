@@ -198,6 +198,10 @@ export const envSchema = z.object({
   // Account pool + admin panel. Either one enables pool mode (see Config.adminKey).
   KIRO2CLAUDE_ADMIN_KEY: optionalString(),
   KIRO2CLAUDE_ACCOUNTS_FILE: optionalString(),
+  // Request log behind /admin: SQLite file (default requests.db next to the accounts file)
+  // and retention in days (0 = off).
+  KIRO2CLAUDE_REQUEST_LOG_FILE: optionalString(),
+  KIRO2CLAUDE_REQUEST_LOG_DAYS: intField('KIRO2CLAUDE_REQUEST_LOG_DAYS', 30, { min: 0, max: 3650 }),
   // 上游偶发返回「200 OK + 零内容帧」的空流(silent failure)。pre-commit 阶段
   // 检测到后,网关对**同一请求**最多重发这么多次来透明吸收瞬时空流(实测多数
   // 重试即恢复)。默认 2;0 = 关闭重试,退回纯转发(立即回 503 overloaded_error)。
@@ -291,6 +295,8 @@ export function envToConfig(env: ParsedEnv): Config {
     sqliteDbPath: env.KIRO2CLAUDE_SQLITE_DB_PATH,
     adminKey: env.KIRO2CLAUDE_ADMIN_KEY,
     accountsFile: env.KIRO2CLAUDE_ACCOUNTS_FILE,
+    requestLogFile: env.KIRO2CLAUDE_REQUEST_LOG_FILE,
+    requestLogDays: env.KIRO2CLAUDE_REQUEST_LOG_DAYS,
     emptyStreamRetries: env.KIRO2CLAUDE_EMPTY_STREAM_RETRIES,
     captureEmptyDir: env.KIRO2CLAUDE_CAPTURE_EMPTY_DIR,
     extractThinking: env.KIRO2CLAUDE_EXTRACT_THINKING,

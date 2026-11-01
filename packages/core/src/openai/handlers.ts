@@ -13,6 +13,7 @@ import {
   ConversionError,
   type ConversionResult,
   convertRequest,
+  reasoningLogFields,
   responseThinkingEnabled,
   toKiroRequest,
 } from '../claude/converter.js';
@@ -22,6 +23,7 @@ import { buildToolTextRegistry } from '../claude/tool-call-text.js';
 import { serializeKiroRequest } from '../kiro/model/requests/kiro.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
+import { noteRequestLog } from '../shared/request-log.js';
 import { countAllTokens } from '../token.js';
 import { convertOpenAiRequest } from './converter.js';
 import { getOpenAiModelsResponse } from './models-catalog.js';
@@ -111,6 +113,7 @@ export function createPostChatCompletions(deps: PostMessagesDeps) {
     }
 
     const kiroRequest = toKiroRequest(conversionResult);
+    noteRequestLog(reasoningLogFields(kiroRequest));
 
     let requestBody: string;
     try {
@@ -161,6 +164,8 @@ export function createPostChatCompletions(deps: PostMessagesDeps) {
         rescueRegistry,
       );
     }
+
+    noteRequestLog({ emptyAttempts: result.emptyAttempts });
 
     if (result.emptyResponse && deps.captureEmptyDir) {
       captureEmptyRequest(deps.captureEmptyDir, {

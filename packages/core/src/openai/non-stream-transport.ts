@@ -28,6 +28,7 @@ import type { ToolTextRegistry } from '../claude/tool-call-text.js';
 import type { KiroProvider } from '../kiro/provider.js';
 import type { HookBus } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
+import { noteRequestErrorDetail, noteRequestLog } from '../shared/request-log.js';
 import { estimateOutputTokens } from '../token.js';
 import { mapProviderErrorOpenAi } from './error-mapper.js';
 import { createOpenAiError } from './types.js';
@@ -134,6 +135,7 @@ export async function runOpenAiNonStream(
         await hookBus.runUsageFinish(hookEvent);
       }
       const { status, errorType, message } = upstreamErrorWire(reduced.upstreamError.retryable);
+      noteRequestErrorDetail(`${reduced.upstreamError.code}: ${reduced.upstreamError.message}`);
       log.warn({
         msg: 'openai non-stream: mid-stream error frame, surfacing error',
         downstream_status: status,
@@ -184,6 +186,11 @@ export async function runOpenAiNonStream(
       resolveCacheReadTokens(hookEvent, finalInputTokens),
       resolvePluginUsageExtensions(hookEvent),
     );
+
+    noteRequestLog({
+      stopReason: reduced.stopReason,
+      toolNames: reduced.toolUses.map((t) => String(t.name)),
+    });
 
     log.info({
       msg: 'openai non-stream completed',

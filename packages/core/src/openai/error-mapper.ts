@@ -6,11 +6,13 @@
  */
 
 import type { FastifyReply } from 'fastify';
-import { classifyProviderError } from '../claude/error-mapper.js';
+import { classifyProviderError, providerErrorDetail } from '../claude/error-mapper.js';
+import { noteRequestError } from '../shared/request-log.js';
 import { createOpenAiError } from './types.js';
 
 export function mapProviderErrorOpenAi(err: unknown, reply: FastifyReply): void {
   const c = classifyProviderError(err);
+  noteRequestError(c.errorType, c.message, providerErrorDetail(err));
   if (c.retryAfterSeconds !== undefined) {
     reply.header('Retry-After', String(c.retryAfterSeconds));
   }

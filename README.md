@@ -78,6 +78,14 @@ New API：新建一个「Anthropic Claude」类型的渠道，填上面的 Claud
 - **出错时自动换账号。** 被限流（429）就冷却一会儿；额度用完就冷却到额度重置那天；凭据被拒就冷却 10 分钟。这三种情况都会把当前请求换到下一个账号重发。
 - **refresh token 失效**的账号会自动停用，提示你重新登录。
 
+## 请求日志
+
+后台的「请求日志」标签记录每一次模型请求：时间、用的哪个账号、模型、思考强度、状态码和错误原因、总耗时和首字耗时、输入 / 缓存读 / 缓存写 / 输出 token、credits、客户端 IP 和 User-Agent。上面有按时间段的汇总，可以按账号、模型、成功或失败筛选。
+
+- 只记这些元数据，**不记请求和回复的正文**。
+- 缓存读和缓存写是根据 credits 反推的估算值，Kiro 上游不直接报告缓存。
+- 存在 accounts 文件同目录的 `requests.db`（SQLite），默认保留 30 天。
+
 ## 思考（thinking）怎么控制
 
 思考在 Kiro 里是请求参数，不是单独的模型，所以模型列表里没有 `-thinking` 版本。规则很简单：
@@ -109,6 +117,8 @@ New API：新建一个「Anthropic Claude」类型的渠道，填上面的 Claud
 | `KIRO2CLAUDE_API_KEY` | 客户端调用接口用的密钥（必填） |
 | `KIRO2CLAUDE_ADMIN_KEY` | 后台密码，设置后开启号池和 `/admin` 后台 |
 | `KIRO2CLAUDE_ACCOUNTS_FILE` | 账号文件路径，默认是工作目录下的 `accounts.json` |
+| `KIRO2CLAUDE_REQUEST_LOG_DAYS` | 请求日志保留天数，默认 30，设为 0 关闭 |
+| `KIRO2CLAUDE_REQUEST_LOG_FILE` | 请求日志文件，默认是 accounts 文件同目录的 `requests.db` |
 | `KIRO2CLAUDE_HOST` / `KIRO2CLAUDE_PORT` | 监听地址和端口，默认 `127.0.0.1:8080`，容器里要设成 `0.0.0.0` |
 
 其余变量和原版 kiro2claude 一样，见 [.env.example](.env.example)。

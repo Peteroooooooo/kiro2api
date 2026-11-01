@@ -18,6 +18,10 @@ export interface Config {
   adminKey?: string;
   /** JSON file holding pool accounts. Defaults to `accounts.json` in the working directory. */
   accountsFile?: string;
+  /** SQLite file for the `/admin` request log. Defaults to `requests.db` next to the accounts file. */
+  requestLogFile?: string;
+  /** Days of request log to keep (default 30). 0 turns the request log off. Pool mode with an admin key only. */
+  requestLogDays: number;
   /**
    * 上游偶发返回「200 OK + 零内容帧」的空流(silent failure)。pre-commit 阶段
    * 检测到后,网关对同一请求最多重发这么多次来透明吸收瞬时空流。默认 2;

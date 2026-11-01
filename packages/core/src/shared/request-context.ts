@@ -9,6 +9,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import crypto from 'node:crypto';
+import type { RequestLogDraft } from './request-log.js';
 
 export interface RequestContext {
   /** 8 字符 hex 请求关联 ID */
@@ -26,6 +27,8 @@ export interface RequestContext {
   stripPluginUsage?: boolean;
   /** Pool account that served the latest upstream call of this request (pool mode only). */
   accountId?: string;
+  /** Admin request-log record being filled in; only set on model routes (see `shared/request-log.ts`). */
+  requestLog?: RequestLogDraft;
 }
 
 export const requestContextStorage = new AsyncLocalStorage<RequestContext>();

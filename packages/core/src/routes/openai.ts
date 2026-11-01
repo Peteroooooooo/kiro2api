@@ -14,6 +14,7 @@ import type { FastifyInstance } from 'fastify';
 import { createPostChatCompletions, getOpenAiModels } from '../openai/handlers.js';
 import { createPostResponses } from '../openai/responses/handlers.js';
 import { createApiKeyAuthHook } from '../shared/auth-hook.js';
+import { withRequestLog } from '../shared/request-log.js';
 import type { ClaudeRoutesDeps } from './claude.js';
 
 /** Maximum request body size (50 MB) */
@@ -37,7 +38,15 @@ export async function registerOpenAiRoutes(
   const postChatCompletions = createPostChatCompletions(deps);
 
   fastify.get('/models', getOpenAiModels);
-  fastify.post('/chat/completions', { bodyLimit: MAX_BODY_SIZE }, postChatCompletions);
+  fastify.post(
+    '/chat/completions',
+    { bodyLimit: MAX_BODY_SIZE },
+    withRequestLog(postChatCompletions),
+  );
   // Responses API(Codex CLI 走这条;wire_api=responses)。
-  fastify.post('/responses', { bodyLimit: MAX_BODY_SIZE }, createPostResponses(deps));
+  fastify.post(
+    '/responses',
+    { bodyLimit: MAX_BODY_SIZE },
+    withRequestLog(createPostResponses(deps)),
+  );
 }
