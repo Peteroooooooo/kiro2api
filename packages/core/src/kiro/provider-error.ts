@@ -251,6 +251,15 @@ function declaredReasons(body: string): string[] {
 }
 
 /**
+ * The first `reason` the body declares, verbatim (e.g. `USER_REQUEST_RATE_EXCEEDED`).
+ * For logs and cooldown labels only — classification goes through the dedicated
+ * matchers above, never through this.
+ */
+export function upstreamReason(body: string): string | undefined {
+  return declaredReasons(body)[0];
+}
+
+/**
  * Return the model-capacity reason token named by this response body, or
  * `undefined` if the body doesn't name one.
  *

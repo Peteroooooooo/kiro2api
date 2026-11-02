@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ProviderError } from '../../src/kiro/provider-error.js';
-import { RetryExecutor } from '../../src/kiro/retry-executor.js';
+import { accountOutcomeOf, RetryExecutor } from '../../src/kiro/retry-executor.js';
 import {
   baseRequest,
   makeStubAxios,
@@ -248,5 +248,43 @@ describe('RetryExecutor — 429 fast-path / 408+5xx pass-through', () => {
         expect(err.kind.retryAfterSeconds).toBeUndefined();
       }
     }
+  });
+});
+
+describe('accountOutcomeOf — which account a failure belongs to', () => {
+  const rate = (body: string) =>
+    new ProviderError({ kind: 'rate_limited', status: 429, retryAfterSeconds: undefined }, body);
+
+  it('a per-user 429 is account-scoped and carries the upstream reason', () => {
+    const body =
+      '{"__type":"com.amazon.kiro.runtimeservice#ThrottlingException","message":"Too many requests","reason":"USER_REQUEST_RATE_EXCEEDED"}';
+    expect(accountOutcomeOf(rate(body), 'claude-opus-5.5')).toEqual({
+      kind: 'rate_limited',
+      retryAfterSeconds: undefined,
+      reason: 'USER_REQUEST_RATE_EXCEEDED',
+    });
+  });
+
+  it('a 429 naming model capacity is a per-model capacity outcome', () => {
+    const body =
+      '{"message":"I am experiencing high traffic","reason":"INSUFFICIENT_MODEL_CAPACITY"}';
+    expect(accountOutcomeOf(rate(body), 'claude-opus-5.5')).toEqual({
+      kind: 'capacity',
+      model: 'claude-opus-5.5',
+    });
+  });
+
+  it('a 5xx overloaded is a capacity outcome too', () => {
+    const err = new ProviderError(
+      { kind: 'overloaded', status: 500, reason: 'MODEL_TEMPORARILY_UNAVAILABLE' },
+      '',
+    );
+    expect(accountOutcomeOf(err, 'm')).toEqual({ kind: 'capacity', model: 'm' });
+  });
+
+  it('a generic transient 5xx is not account-scoped', () => {
+    expect(
+      accountOutcomeOf(new ProviderError({ kind: 'transient', status: 502 }, ''), 'm'),
+    ).toBeUndefined();
   });
 });

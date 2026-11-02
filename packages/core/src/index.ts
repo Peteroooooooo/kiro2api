@@ -42,6 +42,7 @@ import { findUpwards } from './shared/paths.js';
 import {
   generateReqId,
   getRequestContext,
+  type RequestContext,
   requestContextStorage,
 } from './shared/request-context.js';
 import { noteErrorResponseBody, noteRequestLog, setRequestLogSink } from './shared/request-log.js';
@@ -341,7 +342,10 @@ async function main(): Promise<void> {
   app.addHook('onRequest', (request, reply, done) => {
     const reqId = (request.headers['x-request-id'] as string) || generateReqId();
     reply.header('x-request-id', reqId);
-    requestContextStorage.run({ reqId, startTime: Date.now() }, done);
+    const ctx: RequestContext = { reqId, startTime: Date.now() };
+    // 号池在途计数:流式响应要到连接关闭才算结束,所以挂在 close 上而不是 handler 返回时。
+    reply.raw.once('close', () => ctx.poolLease?.release());
+    requestContextStorage.run(ctx, done);
   });
 
   app.addHook('onResponse', (request, reply, done) => {

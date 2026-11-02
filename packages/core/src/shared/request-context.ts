@@ -27,6 +27,12 @@ export interface RequestContext {
   stripPluginUsage?: boolean;
   /** Pool account that served the latest upstream call of this request (pool mode only). */
   accountId?: string;
+  /**
+   * In-flight slot this request holds on a pool account (pool mode only). Taken by
+   * `AccountPool.acquireContext`, released when the HTTP response closes (index.ts
+   * onRequest hook), so a streaming response keeps counting until it ends.
+   */
+  poolLease?: { accountId: string; release(): void };
   /** Admin request-log record being filled in; only set on model routes (see `shared/request-log.ts`). */
   requestLog?: RequestLogDraft;
 }

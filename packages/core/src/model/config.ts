@@ -23,6 +23,17 @@ export interface Config {
   /** Days of request log to keep (default 30). 0 turns the request log off. Pool mode with an admin key only. */
   requestLogDays: number;
   /**
+   * 号池:单账号在途请求上限(默认 4,0 = 不限)。粘性会话的账号满了也会溢出到
+   * 最空闲的账号——代价是那一次请求没有上游前缀缓存。缺省视为 4。
+   */
+  poolMaxInflight?: number;
+  /** 号池:全部账号冷却时,网关愿意等最近恢复点的上限(毫秒,默认 8000,0 = 不等)。 */
+  poolWaitMs?: number;
+  /** 号池:容量类 429/5xx 是否换一个账号再试一次(默认 true)。 */
+  poolCapacityFailover?: boolean;
+  /** 号池:账号级 429 自适应冷却上限(秒,默认 120)。 */
+  poolCooldownMaxS?: number;
+  /**
    * 上游偶发返回「200 OK + 零内容帧」的空流(silent failure)。pre-commit 阶段
    * 检测到后,网关对同一请求最多重发这么多次来透明吸收瞬时空流。默认 2;
    * 0 = 关闭重试(立即回 503 overloaded_error,纯转发行为)。
