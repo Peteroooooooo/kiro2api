@@ -34,13 +34,17 @@ export interface AcquireOptions {
 }
 
 /**
- * Account-scoped results the executor reports back. Model-capacity events are
- * not reported: they are upstream-wide, and cooling an account for them would
- * only shrink the pool.
+ * Account-scoped results the executor reports back.
+ *
+ * `capacity` (429 `INSUFFICIENT_MODEL_CAPACITY` / 5xx `MODEL_TEMPORARILY_UNAVAILABLE`)
+ * cools only that account's *model* for a short while, never the whole account:
+ * the account still serves its other models, and a short cooldown is enough to
+ * stop one conversation from hammering a model that just said "no capacity".
  */
 export type AccountOutcome =
   | { kind: 'success' }
-  | { kind: 'rate_limited'; retryAfterSeconds?: number }
+  | { kind: 'rate_limited'; retryAfterSeconds?: number; reason?: string }
+  | { kind: 'capacity'; model?: string }
   | { kind: 'quota_exhausted' }
   | { kind: 'unauthorized' };
 

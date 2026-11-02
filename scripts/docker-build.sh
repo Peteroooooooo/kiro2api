@@ -33,12 +33,7 @@ if [[ ! -f "$FIXTURE" ]]; then
   exit 1
 fi
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "错误: 未找到 node（用于解析 fixture JSON）" >&2
-  exit 1
-fi
-
-VERSION="$(node -e 'const fs=require("fs"); const p=process.argv[1]; const o=JSON.parse(fs.readFileSync(p,"utf-8")); process.stdout.write(o.kiroCliVersion || "")' "$FIXTURE")"
+VERSION="$(sed -n 's/.*"kiroCliVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$FIXTURE" | head -n 1)"
 
 if [[ -z "$VERSION" ]]; then
   echo "错误: $FIXTURE 缺少 kiroCliVersion 字段" >&2

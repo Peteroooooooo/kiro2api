@@ -24,10 +24,13 @@
  *    always pre-commit. Bodies with no reasoningContent are not retried.
  *
  * With an account pool there is one more: a failure that belongs to the
- * account (429 not naming model capacity, quota exhausted, unauthorized after
- * the refresh retry) moves the whole request to the next account, at most
- * once per account (`accountOutcomeOf`). With a single credential the
- * failover capacity is 1 and nothing changes.
+ * account (account-scoped 429, quota exhausted, unauthorized after the refresh
+ * retry) moves the whole request to the next account, at most once per account
+ * (`accountOutcomeOf`). A model-capacity error (429 `INSUFFICIENT_MODEL_CAPACITY`
+ * or 5xx `overloaded`) moves it to **one** other account at most
+ * (`poolCapacityFailover`, default on); a second capacity answer is forwarded
+ * as-is. All of this happens before any byte goes downstream. With a single
+ * credential the failover capacity is 1 and nothing changes.
  *
  * All other error paths are single-attempt:
  *
@@ -81,6 +84,7 @@ import {
   isBearerTokenInvalidBody,
   matchModelCapacityReason,
   ProviderError,
+  upstreamReason,
 } from './provider-error.js';
 import type { AccountOutcome, CallContext, TokenSource } from './token-source.js';
 
@@ -232,6 +236,8 @@ export class RetryExecutor {
     const model = extractModelId(req.body);
     const exclude = new Set<string>();
     const capacity = this.tokenManager.failoverCapacity(model);
+    const capacityFailover = this.tokenManager.config?.().poolCapacityFailover ?? true;
+    let capacityHits = 0;
 
     // Account failover (pool only): a failure scoped to one account moves the
     // request to another account. Everything sent so far was rejected before a
@@ -241,19 +247,34 @@ export class RetryExecutor {
       try {
         const response = await this.executeOnAccount(req, { affinityKey, exclude, model }, used);
         this.tokenManager.reportOutcome(used.ctx?.accountId, { kind: 'success' });
+        if (capacityHits > 0) {
+          getLogger().info({
+            msg: 'capacity failover succeeded',
+            type: req.label,
+            account: used.ctx?.accountId,
+            model,
+          });
+        }
         return response;
       } catch (e) {
         const accountId = used.ctx?.accountId;
-        const outcome = accountOutcomeOf(e);
+        const outcome = accountOutcomeOf(e, model);
         if (!outcome || accountId === undefined) throw e;
         this.tokenManager.reportOutcome(accountId, outcome);
         exclude.add(accountId);
         if (exclude.size >= capacity) throw e;
+        // Capacity: one more account at most. A second "no capacity" means the
+        // shortage is upstream-wide (踩坑「跨模型对照」) and more tries only burn time.
+        if (outcome.kind === 'capacity') {
+          capacityHits++;
+          if (!capacityFailover || capacityHits > 1) throw e;
+        }
         getLogger().info({
           msg: 'account-scoped failure, failing over to another account',
           type: req.label,
           account: accountId,
           outcome: outcome.kind,
+          model: outcome.kind === 'capacity' ? model : undefined,
         });
       }
     }
@@ -454,16 +475,27 @@ export class RetryExecutor {
 }
 
 /**
- * Which failures belong to the account rather than the request or the
- * upstream as a whole. A 429 that names model capacity is upstream-wide.
+ * Which failures belong to the account rather than the request.
+ *
+ * A model-capacity error (429 naming `INSUFFICIENT_MODEL_CAPACITY`, or the 5xx
+ * `overloaded` kind) becomes `capacity`: the pool cools only that model on that
+ * account for a few seconds and the executor tries one other account. It used to
+ * be treated as upstream-wide and ignored, which kept a conversation pinned to the
+ * same account/model for every client retry.
  */
-export function accountOutcomeOf(e: unknown): AccountOutcome | undefined {
+export function accountOutcomeOf(e: unknown, model?: string): AccountOutcome | undefined {
   if (!(e instanceof ProviderError)) return undefined;
   switch (e.kind.kind) {
     case 'rate_limited':
       return matchModelCapacityReason(e.body) === undefined
-        ? { kind: 'rate_limited', retryAfterSeconds: e.kind.retryAfterSeconds }
-        : undefined;
+        ? {
+            kind: 'rate_limited',
+            retryAfterSeconds: e.kind.retryAfterSeconds,
+            reason: upstreamReason(e.body),
+          }
+        : { kind: 'capacity', model };
+    case 'overloaded':
+      return { kind: 'capacity', model };
     case 'quota_exhausted':
       return { kind: 'quota_exhausted' };
     case 'unauthorized':

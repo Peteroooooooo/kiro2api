@@ -393,6 +393,8 @@ a { color: var(--accent); }
         : a.status === 'cooling' ? '<span class="chip cooling">冷却中</span><div class="sub">' + esc(a.cooldownReason) + '，' + fmtUntil(a.cooldownUntil) + '后恢复</div>'
         : '<span class="chip disabled">已停用</span>' + (a.disabledReason ? '<div class="sub">' + esc(a.disabledReason) + '</div>' : '');
       if (a.stats.lastError && a.status === 'ok') st += '<div class="sub" title="' + esc(a.stats.lastError) + '">上次错误 ' + fmtTime(a.stats.lastErrorAt) + '</div>';
+      if (a.modelCooldowns) Object.keys(a.modelCooldowns).forEach(function (m) { st += '<div class="sub">' + esc(m) + ' 容量冷却，' + fmtUntil(a.modelCooldowns[m]) + '后恢复</div>'; });
+      if (a.inflight) st += '<div class="sub">在途 ' + a.inflight + '</div>';
       var q = '-';
       if (a.quota) {
         var pct = a.quota.limit > 0 ? Math.min(100, a.quota.current / a.quota.limit * 100) : 0;

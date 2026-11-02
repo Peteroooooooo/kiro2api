@@ -202,6 +202,21 @@ export const envSchema = z.object({
   // and retention in days (0 = off).
   KIRO2CLAUDE_REQUEST_LOG_FILE: optionalString(),
   KIRO2CLAUDE_REQUEST_LOG_DAYS: intField('KIRO2CLAUDE_REQUEST_LOG_DAYS', 30, { min: 0, max: 3650 }),
+  // 号池调度(见 pool/account-pool.ts 头注释):
+  // 单账号在途请求上限,超出的请求(哪怕是粘性会话)溢出到最空闲的账号;0 = 不限。
+  KIRO2CLAUDE_POOL_MAX_INFLIGHT: intField('KIRO2CLAUDE_POOL_MAX_INFLIGHT', 4, {
+    min: 0,
+    max: 1000,
+  }),
+  // 全部账号都在冷却时,最近一个恢复点在这么多毫秒内就由网关等它,否则立刻回 429。0 = 不等。
+  KIRO2CLAUDE_POOL_WAIT_MS: intField('KIRO2CLAUDE_POOL_WAIT_MS', 8_000, { min: 0, max: 60_000 }),
+  // 容量类 429/5xx(INSUFFICIENT_MODEL_CAPACITY 等)是否换一个账号再试一次。
+  KIRO2CLAUDE_POOL_CAPACITY_FAILOVER: boolField(true),
+  // 账号级 429 自适应冷却的上限(秒);上游给了 Retry-After 时以它为准(仍封顶 3600)。
+  KIRO2CLAUDE_POOL_COOLDOWN_MAX_S: intField('KIRO2CLAUDE_POOL_COOLDOWN_MAX_S', 120, {
+    min: 1,
+    max: 3600,
+  }),
   // 上游偶发返回「200 OK + 零内容帧」的空流(silent failure)。pre-commit 阶段
   // 检测到后,网关对**同一请求**最多重发这么多次来透明吸收瞬时空流(实测多数
   // 重试即恢复)。默认 2;0 = 关闭重试,退回纯转发(立即回 503 overloaded_error)。
@@ -297,6 +312,10 @@ export function envToConfig(env: ParsedEnv): Config {
     accountsFile: env.KIRO2CLAUDE_ACCOUNTS_FILE,
     requestLogFile: env.KIRO2CLAUDE_REQUEST_LOG_FILE,
     requestLogDays: env.KIRO2CLAUDE_REQUEST_LOG_DAYS,
+    poolMaxInflight: env.KIRO2CLAUDE_POOL_MAX_INFLIGHT,
+    poolWaitMs: env.KIRO2CLAUDE_POOL_WAIT_MS,
+    poolCapacityFailover: env.KIRO2CLAUDE_POOL_CAPACITY_FAILOVER,
+    poolCooldownMaxS: env.KIRO2CLAUDE_POOL_COOLDOWN_MAX_S,
     emptyStreamRetries: env.KIRO2CLAUDE_EMPTY_STREAM_RETRIES,
     captureEmptyDir: env.KIRO2CLAUDE_CAPTURE_EMPTY_DIR,
     extractThinking: env.KIRO2CLAUDE_EXTRACT_THINKING,
