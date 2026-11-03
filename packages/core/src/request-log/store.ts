@@ -40,6 +40,8 @@ export interface RequestLogEntry {
   throttleRetries?: number;
   /** Ms waited inside the gateway for throttle holds (0 when absent). */
   throttleWaitMs?: number;
+  /** Source of the input / cache split, see `RequestLogUsage.accounting`; unset on rows before it was recorded. */
+  accounting?: 'local' | 'derived' | 'raw';
   errorType?: string;
   errorMessage?: string;
   errorDetail?: string;
@@ -70,6 +72,39 @@ export interface RequestLogSummary {
   cacheWriteTokens: number;
   credits: number;
   avgDurationMs?: number;
+  avgTtftMs?: number;
+  /** Mean upstream context size of successful requests. */
+  avgContextTokens?: number;
+  /** Requests whose prompt was mostly not in the upstream cache (see `COLD_SQL`), and their credits. */
+  coldRequests: number;
+  coldCredits: number;
+  /** Rows counted by the gateway's own cache model; the rest are credit-derived estimates. */
+  localRows: number;
+}
+
+/** Totals of one time bucket (`start` = bucket start, ms). */
+export interface RequestLogBucket {
+  start: number;
+  requests: number;
+  failed: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  credits: number;
+}
+
+export interface RequestLogAccountRow {
+  accountId: string;
+  accountName: string;
+  requests: number;
+  failed: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  credits: number;
+  coldRequests: number;
   avgTtftMs?: number;
 }
 
@@ -107,7 +142,8 @@ CREATE TABLE IF NOT EXISTS requests (
   client_ip TEXT,
   user_agent TEXT,
   throttle_retries INTEGER NOT NULL DEFAULT 0,
-  throttle_wait_ms INTEGER NOT NULL DEFAULT 0
+  throttle_wait_ms INTEGER NOT NULL DEFAULT 0,
+  accounting TEXT
 );
 CREATE INDEX IF NOT EXISTS requests_ts ON requests (ts);
 CREATE INDEX IF NOT EXISTS requests_account_ts ON requests (account_id, ts);
@@ -118,9 +154,44 @@ CREATE INDEX IF NOT EXISTS requests_model_ts ON requests (model, ts);
 const ADDED_COLUMNS: [string, string][] = [
   ['throttle_retries', 'INTEGER NOT NULL DEFAULT 0'],
   ['throttle_wait_ms', 'INTEGER NOT NULL DEFAULT 0'],
+  ['accounting', 'TEXT'],
 ];
 
 const FAILED_SQL = '(status >= 400 OR error_type IS NOT NULL)';
+
+const PROMPT_SQL =
+  '(COALESCE(input_tokens, 0) + COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0))';
+
+/**
+ * A cold start: a prompt over 5K tokens of which under 10 % came from cache (idle past the
+ * cache lifetime, a new conversation, a compaction, or an account switch).
+ */
+const COLD_SQL = `(${PROMPT_SQL} > 5000 AND COALESCE(cache_read_tokens, 0) < 0.1 * ${PROMPT_SQL})`;
+
+const TOKEN_SUMS_SQL = `
+  COUNT(*) AS requests,
+  COALESCE(SUM(CASE WHEN ${FAILED_SQL} THEN 1 ELSE 0 END), 0) AS failed,
+  COALESCE(SUM(input_tokens), 0) AS input_tokens,
+  COALESCE(SUM(output_tokens), 0) AS output_tokens,
+  COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+  COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+  COALESCE(SUM(credits), 0) AS credits`;
+
+function tokenSums(r: Row) {
+  return {
+    requests: Number(r.requests),
+    failed: Number(r.failed),
+    inputTokens: Number(r.input_tokens),
+    outputTokens: Number(r.output_tokens),
+    cacheReadTokens: Number(r.cache_read_tokens),
+    cacheWriteTokens: Number(r.cache_write_tokens),
+    credits: Number(r.credits),
+  };
+}
+
+function accountingOf(v: unknown): RequestLogEntry['accounting'] {
+  return v === 'local' || v === 'derived' || v === 'raw' ? v : undefined;
+}
 
 type Row = Record<string, unknown>;
 
@@ -173,6 +244,7 @@ function fromRow(r: Row): RequestLogEntry {
     emptyAttempts: Number(r.empty_attempts ?? 0),
     throttleRetries: Number(r.throttle_retries ?? 0),
     throttleWaitMs: Number(r.throttle_wait_ms ?? 0),
+    accounting: accountingOf(r.accounting),
     errorType: str(r.error_type),
     errorMessage: str(r.error_message),
     errorDetail: str(r.error_detail),
@@ -239,13 +311,13 @@ export class RequestLogStore {
         accounts_tried, status, duration_ms, ttft_ms, input_tokens, output_tokens,
         cache_read_tokens, cache_write_tokens, context_tokens, credits, metering_lost,
         stop_reason, tool_names, empty_attempts, error_type, error_message, error_detail,
-        client_disconnected, client_ip, user_agent, throttle_retries, throttle_wait_ms
+        client_disconnected, client_ip, user_agent, throttle_retries, throttle_wait_ms, accounting
       ) VALUES (
         @ts, @reqId, @method, @path, @model, @stream, @thinking, @effort, @accountId, @accountName,
         @accountsTried, @status, @durationMs, @ttftMs, @inputTokens, @outputTokens,
         @cacheReadTokens, @cacheWriteTokens, @contextTokens, @credits, @meteringLost,
         @stopReason, @toolNames, @emptyAttempts, @errorType, @errorMessage, @errorDetail,
-        @clientDisconnected, @clientIp, @userAgent, @throttleRetries, @throttleWaitMs
+        @clientDisconnected, @clientIp, @userAgent, @throttleRetries, @throttleWaitMs, @accounting
       )`);
   }
 
@@ -283,6 +355,7 @@ export class RequestLogStore {
       userAgent: e.userAgent ?? null,
       throttleRetries: e.throttleRetries ?? 0,
       throttleWaitMs: e.throttleWaitMs ?? 0,
+      accounting: e.accounting ?? null,
     });
   }
 
@@ -308,29 +381,61 @@ export class RequestLogStore {
     const w = where(filter);
     const r = this.#db
       .prepare(`
-        SELECT
-          COUNT(*) AS requests,
-          COALESCE(SUM(CASE WHEN ${FAILED_SQL} THEN 1 ELSE 0 END), 0) AS failed,
-          COALESCE(SUM(input_tokens), 0) AS input_tokens,
-          COALESCE(SUM(output_tokens), 0) AS output_tokens,
-          COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-          COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-          COALESCE(SUM(credits), 0) AS credits,
+        SELECT ${TOKEN_SUMS_SQL},
           AVG(CASE WHEN ${FAILED_SQL} THEN NULL ELSE duration_ms END) AS avg_duration_ms,
-          AVG(CASE WHEN ${FAILED_SQL} THEN NULL ELSE ttft_ms END) AS avg_ttft_ms
+          AVG(CASE WHEN ${FAILED_SQL} THEN NULL ELSE ttft_ms END) AS avg_ttft_ms,
+          AVG(CASE WHEN ${FAILED_SQL} THEN NULL ELSE context_tokens END) AS avg_context_tokens,
+          COALESCE(SUM(CASE WHEN ${COLD_SQL} THEN 1 ELSE 0 END), 0) AS cold_requests,
+          COALESCE(SUM(CASE WHEN ${COLD_SQL} THEN credits ELSE 0 END), 0) AS cold_credits,
+          COALESCE(SUM(CASE WHEN accounting = 'local' THEN 1 ELSE 0 END), 0) AS local_rows
         FROM requests ${w.sql}`)
       .get(...w.params) as Row;
     return {
-      requests: Number(r.requests),
-      failed: Number(r.failed),
-      inputTokens: Number(r.input_tokens),
-      outputTokens: Number(r.output_tokens),
-      cacheReadTokens: Number(r.cache_read_tokens),
-      cacheWriteTokens: Number(r.cache_write_tokens),
-      credits: Number(r.credits),
+      ...tokenSums(r),
       avgDurationMs: num(r.avg_duration_ms),
       avgTtftMs: num(r.avg_ttft_ms),
+      avgContextTokens: num(r.avg_context_tokens),
+      coldRequests: Number(r.cold_requests),
+      coldCredits: Number(r.cold_credits),
+      localRows: Number(r.local_rows),
     };
+  }
+
+  /**
+   * Totals per time bucket, oldest first; empty buckets are left out. `tzOffsetMs` is added
+   * to UTC before bucketing, so day buckets start at the viewer's local midnight.
+   */
+  series(filter: RequestLogFilter, bucketMs: number, tzOffsetMs = 0): RequestLogBucket[] {
+    const w = where(filter);
+    const tz = Math.trunc(tzOffsetMs);
+    const bucket = Math.max(1, Math.trunc(bucketMs));
+    const rows = this.#db
+      .prepare(`
+        SELECT CAST((ts + ?) / ? AS INTEGER) * ? - ? AS start, ${TOKEN_SUMS_SQL}
+        FROM requests ${w.sql}
+        GROUP BY start ORDER BY start`)
+      .all(tz, bucket, bucket, tz, ...w.params) as Row[];
+    return rows.map((r) => ({ start: Number(r.start), ...tokenSums(r) }));
+  }
+
+  /** Totals per serving account, most requests first; rows without an account are left out. */
+  byAccount(filter: RequestLogFilter): RequestLogAccountRow[] {
+    const w = where(filter);
+    const rows = this.#db
+      .prepare(`
+        SELECT account_id, MAX(account_name) AS account_name, ${TOKEN_SUMS_SQL},
+          COALESCE(SUM(CASE WHEN ${COLD_SQL} THEN 1 ELSE 0 END), 0) AS cold_requests,
+          AVG(CASE WHEN ${FAILED_SQL} THEN NULL ELSE ttft_ms END) AS avg_ttft_ms
+        FROM requests ${w.sql ? `${w.sql} AND` : 'WHERE'} account_id IS NOT NULL
+        GROUP BY account_id ORDER BY requests DESC`)
+      .all(...w.params) as Row[];
+    return rows.map((r) => ({
+      accountId: String(r.account_id),
+      accountName: str(r.account_name) ?? String(r.account_id),
+      ...tokenSums(r),
+      coldRequests: Number(r.cold_requests),
+      avgTtftMs: num(r.avg_ttft_ms),
+    }));
   }
 
   /** Values seen in the log, for the filter dropdowns. */
@@ -416,6 +521,7 @@ export function entryFromDraft(
     emptyAttempts: d.emptyAttempts ?? 0,
     throttleRetries: d.throttleRetries ?? 0,
     throttleWaitMs: d.throttleWaitMs ?? 0,
+    accounting: d.usage?.accounting,
     errorType: d.errorType,
     errorMessage: d.errorMessage,
     errorDetail: d.errorDetail?.slice(0, 1000),

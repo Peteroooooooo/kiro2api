@@ -125,6 +125,26 @@ export async function registerAdminRoutes(
         return deps.requestLog.summary(logFilter(request.query ?? {}));
       });
 
+      api.get<LogQuery & { Querystring: { bucket?: string; tz?: string } }>(
+        '/logs/series',
+        async (request, reply) => {
+          if (!deps.requestLog) return fail(reply, 404, 'request log is disabled');
+          const q = request.query ?? {};
+          const bucket = q.bucket === 'day' ? 86_400_000 : q.bucket === '5m' ? 300_000 : 3_600_000;
+          // Minutes east of UTC, as the browser's -getTimezoneOffset().
+          const tzMinutes = intParam(q.tz, 0, -14 * 60, 14 * 60);
+          return {
+            bucketMs: bucket,
+            buckets: deps.requestLog.series(logFilter(q), bucket, tzMinutes * 60_000),
+          };
+        },
+      );
+
+      api.get<LogQuery>('/logs/accounts', async (request, reply) => {
+        if (!deps.requestLog) return fail(reply, 404, 'request log is disabled');
+        return { accounts: deps.requestLog.byAccount(logFilter(request.query ?? {})) };
+      });
+
       api.get('/logs/facets', async (_request, reply) => {
         if (!deps.requestLog) return fail(reply, 404, 'request log is disabled');
         return deps.requestLog.facets();

@@ -6,10 +6,12 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import type { Event, KiroMeteringData } from '../kiro/model/events/base.js';
+import { localPromptSplit } from '../kiro/prompt-cache.js';
 import { type HookBus, UsageFinishEventImpl } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
 import { noteFirstToken, noteRequestLog } from '../shared/request-log.js';
+import { countUpstreamTokens, TokenTally } from '../token.js';
 import { clientModelHasEncryptedReasoning, mapModel, resolveContextUsage } from './converter.js';
 import {
   type LegacyThinkingBoundaryReason,
@@ -67,7 +69,7 @@ export function resolvePluginUsageExtensions(
 }
 
 /**
- * plugin 覆写的 `cache_read_input_tokens`（derived 由 credits 反演的缓存命中），无覆写为 0。
+ * `cache_read_input_tokens`：plugin 覆写优先，否则取网关本地记账（`localPromptSplit`），都没有为 0。
  * OpenAI 两协议只取这一项、映射成 `cached_tokens`（输入总量的子集）；`input_tokens` 覆写
  * 不取，prompt_tokens 仍是总量（踩坑「OpenAI prompt_tokens」）。它是标准字段、不带后端
  * 身份，`/api/*` 镜像同样保留（与 `buildClaudeUsagePayload` 的 override 一致）。
@@ -77,7 +79,10 @@ export function resolveCacheReadTokens(
   hookEvent: UsageFinishEventImpl | undefined,
   promptTokens: number,
 ): number {
-  const override = hookEvent?.getOverrides().get('cache_read_input_tokens') ?? 0;
+  const override =
+    hookEvent?.getOverrides().get('cache_read_input_tokens') ??
+    (hookEvent ? localPromptSplit(hookEvent)?.cacheReadTokens : undefined) ??
+    0;
   return Math.min(Math.max(override, 0), Math.max(promptTokens, 0));
 }
 
@@ -110,11 +115,15 @@ export function buildClaudeUsagePayload(args: {
   const { hookEvent, inputTokens, outputTokens } = args;
   const overrides = hookEvent.getOverrides();
 
+  const local = localPromptSplit(hookEvent);
+
   const payload: ClaudeUsagePayload = {
-    input_tokens: overrides.get('input_tokens') ?? inputTokens,
+    input_tokens: overrides.get('input_tokens') ?? local?.inputTokens ?? inputTokens,
     output_tokens: overrides.get('output_tokens') ?? outputTokens,
-    cache_creation_input_tokens: overrides.get('cache_creation_input_tokens') ?? 0,
-    cache_read_input_tokens: overrides.get('cache_read_input_tokens') ?? 0,
+    cache_creation_input_tokens:
+      overrides.get('cache_creation_input_tokens') ?? local?.cacheWriteTokens ?? 0,
+    cache_read_input_tokens:
+      overrides.get('cache_read_input_tokens') ?? local?.cacheReadTokens ?? 0,
   };
 
   // 标准字段 override 保留——改的是标准字段值、不新增泄漏后端身份的 `kiro_*` 键。
@@ -786,6 +795,8 @@ export class StreamContext {
   inputTokens: number;
   contextInputTokens: number | undefined;
   outputTokens: number;
+  /** Feeds `outputTokens`: visible text, thinking and tool input, counted as one stream. */
+  private outputTally = new TokenTally();
   /**
    * True once a *complete* tool_use (isComplete) has been processed — even one
    * whose input object is empty, e.g. a no-required-args tool like
@@ -1130,12 +1141,17 @@ export class StreamContext {
     }
   }
 
+  private countOutput(text: string): void {
+    this.outputTally.add(text);
+    this.outputTokens = this.outputTally.tokens;
+  }
+
   /** Process assistant response event */
   private processAssistantResponse(content: string): SseEvent[] {
     if (!content) return [];
 
     // Estimate tokens
-    this.outputTokens += estimateTokens(content);
+    this.countOutput(content);
 
     // 原生 reasoning 路径已经发了 thinking content block。第一次切到普通文本
     // 时先关 thinking block，让 text block 正确接续在它后面（index 顺序保证）。
@@ -1220,7 +1236,7 @@ export class StreamContext {
 
     if (text && this.reasoningBlockIndex !== undefined) {
       events.push(this.createThinkingDeltaEvent(this.reasoningBlockIndex, text));
-      this.outputTokens += estimateTokens(text);
+      this.countOutput(text);
     }
 
     if (signature && this.reasoningBlockIndex !== undefined) {
@@ -1502,7 +1518,7 @@ export class StreamContext {
       this.pendingToolCalls.set(toolUse.toolUseId, pending);
     }
     if (toolUse.input) {
-      this.outputTokens += Math.floor((toolUse.input.length + 3) / 4);
+      this.countOutput(toolUse.input);
       pending.chunks.push(toolUse.input);
     }
     if (!toolUse.isComplete) return events;
@@ -1725,27 +1741,5 @@ export class StreamContext {
 
 // Test-only exports (not part of stable public API)
 export const __testing__ = {
-  estimateTokens: (text: string): number => estimateTokens(text),
+  estimateTokens: (text: string): number => Math.max(countUpstreamTokens(text), 1),
 };
-
-/** Simple token estimation */
-function estimateTokens(text: string): number {
-  let chineseCount = 0;
-  let otherCount = 0;
-
-  for (const c of text) {
-    // for-of 字符串迭代的每个元素都是完整 code point，`codePointAt(0)` 永远有值
-    const code = c.codePointAt(0) ?? 0;
-    if (code >= 0x4e00 && code <= 0x9fff) {
-      chineseCount++;
-    } else {
-      otherCount++;
-    }
-  }
-
-  // Chinese: ~1.5 chars/token, English: ~4 chars/token
-  const chineseTokens = Math.floor((chineseCount * 2 + 2) / 3);
-  const otherTokens = Math.floor((otherCount + 3) / 4);
-
-  return Math.max(chineseTokens + otherTokens, 1);
-}

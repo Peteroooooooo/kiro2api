@@ -72,6 +72,7 @@ describe('RequestLogStore', () => {
         emptyAttempts: 2,
         throttleRetries: 3,
         throttleWaitMs: 7_500,
+        accounting: 'local',
       }),
     );
     const { total, items } = store.list({}, 10, 0);
@@ -96,6 +97,7 @@ describe('RequestLogStore', () => {
         emptyAttempts: 2,
         throttleRetries: 3,
         throttleWaitMs: 7_500,
+        accounting: 'local',
       }),
     );
   });
@@ -179,6 +181,10 @@ describe('RequestLogStore', () => {
       credits: expect.closeTo(0.4, 10),
       avgDurationMs: 2000,
       avgTtftMs: 200,
+      avgContextTokens: 1050,
+      coldRequests: 0,
+      coldCredits: 0,
+      localRows: 0,
     });
     expect(store.summary({ since: 5_000 })).toMatchObject({
       requests: 0,
@@ -186,6 +192,73 @@ describe('RequestLogStore', () => {
       credits: 0,
       avgDurationMs: undefined,
     });
+  });
+
+  it('counts cold starts and rows under local accounting', () => {
+    // 6K prompt, 300 read (5 %): cold. 6K prompt, 3K read: warm. 2K prompt, 0 read: too small to count.
+    store.insert(
+      entry({
+        inputTokens: 0,
+        cacheReadTokens: 300,
+        cacheWriteTokens: 5_700,
+        credits: 0.5,
+        accounting: 'local',
+      }),
+    );
+    store.insert(
+      entry({
+        inputTokens: 0,
+        cacheReadTokens: 3_000,
+        cacheWriteTokens: 3_000,
+        credits: 0.2,
+        accounting: 'local',
+      }),
+    );
+    store.insert(
+      entry({ inputTokens: 2_000, cacheReadTokens: 0, cacheWriteTokens: 0, credits: 0.1 }),
+    );
+    expect(store.summary({})).toMatchObject({
+      requests: 3,
+      coldRequests: 1,
+      coldCredits: expect.closeTo(0.5, 10),
+      localRows: 2,
+    });
+  });
+
+  it('series buckets rows by time, shifted to the viewer time zone', () => {
+    const H = 3_600_000;
+    const tz = 8 * H;
+    // Local (UTC+8) midnight of day 1 = 16:00 UTC of day 0.
+    const day1 = 86_400_000 - tz;
+    store.insert(entry({ ts: day1 - 1, credits: 1 }));
+    store.insert(entry({ ts: day1, credits: 2 }));
+    store.insert(entry({ ts: day1 + 5 * H, credits: 3, status: 500 }));
+    const days = store.series({}, 86_400_000, tz);
+    expect(days.map((d) => [d.start, d.requests, d.credits, d.failed])).toEqual([
+      [day1 - 86_400_000, 1, 1, 0],
+      [day1, 2, 5, 1],
+    ]);
+    const hours = store.series({ since: day1 }, H, tz);
+    expect(hours.map((d) => d.start)).toEqual([day1, day1 + 5 * H]);
+    expect(hours[0]).toMatchObject({ inputTokens: 100, outputTokens: 50, cacheReadTokens: 900 });
+  });
+
+  it('byAccount totals per serving account, most requests first', () => {
+    store.insert(entry({ accountId: 'a', accountName: 'A' }));
+    store.insert(entry({ accountId: 'b', accountName: 'B', credits: 1 }));
+    store.insert(entry({ accountId: 'b', accountName: 'B', status: 429, ttftMs: undefined }));
+    store.insert(entry({ accountId: undefined, accountName: undefined }));
+    const rows = store.byAccount({});
+    expect(rows.map((r) => [r.accountId, r.accountName, r.requests, r.failed])).toEqual([
+      ['b', 'B', 2, 1],
+      ['a', 'A', 1, 0],
+    ]);
+    expect(rows[0]).toMatchObject({
+      credits: expect.closeTo(1.2, 10),
+      avgTtftMs: 300,
+      coldRequests: 0,
+    });
+    expect(store.byAccount({ model: 'none' })).toEqual([]);
   });
 
   it('facets list models and the latest name of each account', () => {

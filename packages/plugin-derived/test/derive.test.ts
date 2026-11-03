@@ -1012,11 +1012,26 @@ describe('DerivedPlugin.register — env parsing', () => {
   });
 
   it('out-of-range COST_MULTIPLIER logs the EFFECTIVE 1.0, not the rejected value', async () => {
-    const { ctx, logs } = makeCtx({ KIRO2CLAUDE_COST_MULTIPLIER: '5000' });
+    const { ctx, logs } = makeCtx({
+      KIRO2CLAUDE_COST_MULTIPLIER: '5000',
+      KIRO2CLAUDE_DERIVED_OVERRIDE: 'true',
+    });
     await plugin.register(ctx);
     const registered = logs.info.find((o) => 'multiplier' in o) as
       | { multiplier: number }
       | undefined;
     expect(registered?.multiplier).toBe(1);
+  });
+
+  it('registers no hook by default: the host does its own token accounting', async () => {
+    let hooks = 0;
+    const { ctx } = makeCtx({});
+    (ctx.registerHook as { onUsageFinish: () => void }).onUsageFinish = () => {
+      hooks++;
+    };
+    await plugin.register(ctx);
+    expect(hooks).toBe(0);
+    await plugin.register({ ...ctx, env: { KIRO2CLAUDE_DERIVED_OVERRIDE: 'true' } });
+    expect(hooks).toBe(1);
   });
 });
