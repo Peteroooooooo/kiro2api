@@ -85,8 +85,8 @@ td .sub { color: var(--muted); font-size: 12px; }
 .nav button.active { background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--line); }
 .panel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
 .panel-head h2 { margin: 0; }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-.seg button { border: none; border-radius: 0; padding: 5px 12px; background: var(--panel); color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; max-width: 100%; }
+.seg button { border: none; border-radius: 0; padding: 5px 12px; background: var(--panel); color: var(--muted); white-space: nowrap; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.active { background: var(--accent); color: var(--accent-text); }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
@@ -94,6 +94,23 @@ td .sub { color: var(--muted); font-size: 12px; }
 .card .k { color: var(--muted); font-size: 12px; }
 .card .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
 .card .s { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.custom { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -2px 0 12px; }
+.custom input { padding: 4px 6px; }
+.window { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+.window b { color: var(--text); font-weight: 600; }
+.chart { display: flex; align-items: flex-end; gap: 2px; height: 140px; border-bottom: 1px solid var(--line); margin-top: 6px; }
+.chart .col { flex: 1 1 0; min-width: 0; height: 100%; position: relative; display: flex; align-items: flex-end; cursor: pointer; border-radius: 3px 3px 0 0; }
+.chart .col:hover { background: var(--row-hover); }
+.chart .col i { display: block; width: 100%; min-height: 1px; background: var(--accent); opacity: .75; border-radius: 2px 2px 0 0; }
+.chart .col:hover i { opacity: 1; }
+.chart .col b { position: absolute; left: 0; right: 0; height: 3px; background: var(--ok); border-radius: 2px; }
+.axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 12px; margin-left: auto; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.legend .lc::before { background: var(--accent); opacity: .75; }
+.legend .lh::before { background: var(--ok); height: 3px; vertical-align: 3px; }
+table.accts { min-width: 760px; }
+table.accts th.n, table.accts td.n { text-align: right; font-variant-numeric: tabular-nums; }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
 .filters input[type=search] { min-width: 220px; flex: 1; max-width: 320px; }
 .filters label.chk { color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
@@ -178,15 +195,46 @@ a { color: var(--accent); }
         <div class="panel-head">
           <h2>汇总</h2>
           <div class="seg" id="lRange">
-            <button data-range="1h">1 小时</button>
+            <button data-range="1h">最近 1 小时</button>
             <button data-range="today" class="active">今天</button>
-            <button data-range="7d">7 天</button>
-            <button data-range="30d">30 天</button>
+            <button data-range="yesterday">昨天</button>
+            <button data-range="7d">最近 7 天</button>
+            <button data-range="30d">最近 30 天</button>
+            <button data-range="custom">自定义</button>
           </div>
-          <span class="hint" style="margin:0">跟随下方的账号和模型筛选</span>
         </div>
+        <div class="custom hidden" id="lCustom">
+          <input type="datetime-local" id="lFrom" aria-label="开始时间"> <span class="hint" style="margin:0">到</span>
+          <input type="datetime-local" id="lTo" aria-label="结束时间">
+          <button id="lApply" class="primary">应用</button>
+          <span class="hint" style="margin:0">结束时间留空 = 到现在</span>
+        </div>
+        <p class="window" id="lWindow"></p>
         <div class="cards" id="lCards"></div>
-        <p class="hint">输入是未命中缓存的部分。缓存读和缓存写是 derived 插件根据 credits 反推的估算值（上游不直接报告缓存），所以用灰色显示。总输入 = 输入 + 缓存读 + 缓存写。</p>
+        <p class="hint" id="lHint">总输入是每次发给上游的整段 prompt。缓存读是其中上游能直接复用的部分：同一个账号 5 分钟内发过同样的开头，就按命中算；其余算缓存写。这些数由网关自己记账，不再从 credits 反推。冷启动 = prompt 超过 5K 但缓存读不到 10% 的请求，多半是闲置超过 5 分钟、新开会话或上下文压缩。credits 是上游实际扣的数。范围和下方的账号、模型筛选同时作用于汇总、图表、账号表和请求列表。</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>趋势</h2>
+          <div class="legend"><span class="lc">credits（柱高）</span><span class="lh">缓存命中率（绿线，顶部 = 100%）</span></div>
+        </div>
+        <div class="chart" id="lChart"></div>
+        <div class="axis" id="lAxis"></div>
+        <p class="hint">鼠标停在柱子上看这一段的数字，点击把统计范围缩到这一段。</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>按账号</h2></div>
+        <div class="table-wrap">
+          <table class="accts">
+            <thead><tr>
+              <th>账号</th><th class="n">请求</th><th class="n">失败</th><th class="n">总输入</th><th class="n">命中率</th>
+              <th class="n">输出</th><th class="n">credits</th><th class="n">冷启动</th><th class="n">平均首字</th>
+            </tr></thead>
+            <tbody id="lAccts"></tbody>
+          </table>
+        </div>
       </section>
 
       <section class="panel">
@@ -209,7 +257,7 @@ a { color: var(--accent); }
             <thead><tr>
               <th>时间</th><th>账号</th><th>模型</th><th>状态</th>
               <th class="n">总耗时</th><th class="n">首字</th>
-              <th class="n">输入</th><th class="n">缓存读</th><th class="n">缓存写</th><th class="n">输出</th>
+              <th class="n">总输入</th><th class="n">缓存读</th><th class="n">缓存写</th><th class="n">输出</th>
               <th class="n">credits</th><th>客户端</th>
             </tr></thead>
             <tbody id="lRows"></tbody>
@@ -220,7 +268,7 @@ a { color: var(--accent); }
           <button id="lPrev">上一页</button>
           <button id="lNext">下一页</button>
         </div>
-        <p class="hint">点击一行查看详情。只记录元数据，不记录请求和回复的正文。</p>
+        <p class="hint">点击一行查看详情。只记录元数据，不记录请求和回复的正文。灰色的缓存数是改版前的旧记录，按 credits 反推，只作参考。</p>
       </section>
     </div>
 
@@ -696,6 +744,7 @@ a { color: var(--accent); }
   var view = 'pool';
   var DAY = 86400000;
   var lRange = 'today';
+  var lCustom = { since: 0, until: undefined };
   var lPage = 0;
   var L_PAGE = 50;
   var lOpenId = null;
@@ -709,16 +758,44 @@ a { color: var(--accent); }
   var ERR = { rate_limit_error: '限流', overloaded_error: '上游过载', billing_error: '额度耗尽', invalid_request_error: '请求无效',
     api_error: '服务错误', authentication_error: '认证失败', permission_error: '无权限', not_found_error: '未找到', internal_error: '内部错误' };
 
-  function startOfToday() {
-    var off = new Date().getTimezoneOffset() * 60000;
-    return Math.floor((Date.now() - off) / DAY) * DAY + off;
+  var dfMinute = new Intl.DateTimeFormat(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  var dfHour = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  var dfDay = new Intl.DateTimeFormat(undefined, { month: '2-digit', day: '2-digit' });
+  /** The viewer's wall-clock time of ts, as epoch ms in UTC. */
+  function localMs(ts) { return ts - new Date(ts).getTimezoneOffset() * 60000; }
+  function startOfDay(ts) {
+    var day = Math.floor(localMs(ts) / DAY) * DAY;
+    return day + new Date(day).getTimezoneOffset() * 60000;
   }
-  function rangeSince(r) {
+  function startOfToday() { return startOfDay(Date.now()); }
+  /** The selected range as { since, until }; until undefined = up to now. */
+  function rangeBounds() {
     var now = Date.now();
-    if (r === '1h') return now - 3600000;
-    if (r === '7d') return now - 7 * DAY;
-    if (r === '30d') return now - 30 * DAY;
-    return startOfToday();
+    var today = startOfToday();
+    if (lRange === '1h') return { since: now - 3600000 };
+    if (lRange === 'yesterday') return { since: startOfDay(today - 1), until: today };
+    if (lRange === '7d') return { since: now - 7 * DAY };
+    if (lRange === '30d') return { since: now - 30 * DAY };
+    if (lRange === 'custom') return { since: lCustom.since, until: lCustom.until };
+    return { since: today };
+  }
+  function bucketOf(b) {
+    var span = (b.until || Date.now()) - b.since;
+    if (span <= 2 * 3600000) return { name: '5m', ms: 300000 };
+    if (span <= 2 * DAY + 60000) return { name: 'hour', ms: 3600000 };
+    return { name: 'day', ms: DAY };
+  }
+  function toLocalInput(ts) {
+    return new Date(localMs(ts)).toISOString().slice(0, 16);
+  }
+  function pct(part, whole) { return whole ? (part / whole * 100).toFixed(1) + '%' : '-'; }
+  function promptOf(x) { return (x.inputTokens || 0) + (x.cacheReadTokens || 0) + (x.cacheWriteTokens || 0); }
+  function renderWindow() {
+    var b = rangeBounds();
+    var names = { '1h': '最近 1 小时', today: '今天（本机时区 0 点起）', yesterday: '昨天（本机时区 0 点到 24 点）',
+      '7d': '最近 7 天（往前推 7×24 小时）', '30d': '最近 30 天（往前推 30×24 小时）', custom: '自定义' };
+    $('lWindow').innerHTML = '统计范围：<b>' + esc(names[lRange]) + '</b>　' + esc(dfMinute.format(b.since)) + ' → '
+      + esc(b.until ? dfMinute.format(b.until) : '现在');
   }
   function fmtTok(n) {
     if (n == null) return '-';
@@ -756,19 +833,21 @@ a { color: var(--accent); }
   function failed(l) { return l.status >= 400 || Boolean(l.errorType); }
   function stopOf(l) { return l.stopReason ? (STOP[l.stopReason] || l.stopReason) : ''; }
 
-  function logQuery(forList) {
+  function logQuery(forList, extra) {
     var q = [];
     var add = function (k, v) { if (v !== '' && v != null) q.push(k + '=' + encodeURIComponent(v)); };
+    var b = rangeBounds();
     add('account', $('lAccount').value);
     add('model', $('lModel').value);
+    add('since', b.since);
+    add('until', b.until);
     if (forList) {
       add('status', $('lStatus').value);
       add('q', $('lSearch').value.trim());
       add('limit', L_PAGE);
       add('offset', lPage * L_PAGE);
-    } else {
-      add('since', rangeSince(lRange));
     }
+    if (extra) Object.keys(extra).forEach(function (k) { add(k, extra[k]); });
     return q.length ? '?' + q.join('&') : '';
   }
 
@@ -788,21 +867,25 @@ a { color: var(--accent); }
     });
   }
 
+  var HINT = '';
   function renderCards(s) {
+    if (!HINT) HINT = $('lHint').textContent;
     if (!s) {
-      $('lCards').innerHTML = ['请求数', '输入', '缓存读 ≈', '缓存写 ≈', '输出', 'credits', '平均耗时'].map(function (k) {
+      $('lCards').innerHTML = ['请求数', '总输入', '缓存命中率', '输出', 'credits', '冷启动', '平均耗时'].map(function (k) {
         return '<div class="card"><div class="k">' + k + '</div><div class="v">-</div><div class="s">&nbsp;</div></div>';
       }).join('');
       return;
     }
-    var totalIn = s.inputTokens + s.cacheReadTokens + s.cacheWriteTokens;
+    var totalIn = promptOf(s);
+    var old = s.requests - s.localRows;
+    $('lHint').textContent = HINT + (old > 0 ? ' 这个范围里有 ' + old + ' 条改版前的旧记录，它们的缓存数是按 credits 反推的估算值，命中率会因此偏低。' : '');
     var cards = [
       ['请求数', s.requests.toLocaleString(), '成功 ' + (s.requests - s.failed) + ' · 失败 ' + s.failed],
-      ['输入', fmtTok(s.inputTokens), '总输入 ' + fmtTok(totalIn)],
-      ['缓存读 ≈', fmtTok(s.cacheReadTokens), '命中率 ' + (totalIn ? (s.cacheReadTokens / totalIn * 100).toFixed(1) : '0') + '%'],
-      ['缓存写 ≈', fmtTok(s.cacheWriteTokens), ''],
-      ['输出', fmtTok(s.outputTokens), ''],
+      ['总输入', fmtTok(totalIn), '平均上下文 ' + fmtTok(s.avgContextTokens == null ? null : Math.round(s.avgContextTokens))],
+      ['缓存命中率', pct(s.cacheReadTokens, totalIn), '读 ' + fmtTok(s.cacheReadTokens) + ' · 写 ' + fmtTok(s.cacheWriteTokens)],
+      ['输出', fmtTok(s.outputTokens), '平均每次 ' + fmtTok(s.requests ? Math.round(s.outputTokens / s.requests) : 0)],
       ['credits', s.credits.toFixed(2), '平均每次 ' + (s.requests ? (s.credits / s.requests).toFixed(3) : '0')],
+      ['冷启动', s.coldRequests.toLocaleString(), '花掉 ' + s.coldCredits.toFixed(2) + ' credits（' + pct(s.coldCredits, s.credits) + '）'],
       ['平均耗时', fmtMs(s.avgDurationMs), '平均首字 ' + fmtMs(s.avgTtftMs)]
     ];
     $('lCards').innerHTML = cards.map(function (c) {
@@ -832,9 +915,10 @@ a { color: var(--accent); }
     }
     var credits = fmtCredits(l.credits, 4);
     if (l.meteringLost) credits += ' <span class="err">计量帧丢失：上游可能已扣费但没有记账</span>';
-    var tokens = [l.inputTokens, l.cacheReadTokens, l.cacheWriteTokens, l.outputTokens].map(function (n) {
+    var tokens = [l.inputTokens == null ? null : promptOf(l), l.cacheReadTokens, l.cacheWriteTokens, l.outputTokens].map(function (n) {
       return n == null ? '-' : n.toLocaleString();
     }).join(' / ');
+    var source = { local: '网关本地记账', derived: '按 credits 反推（旧记录）', raw: '未拆分（整段算输入）' }[l.accounting || 'derived'];
     var kv = [
       ['请求 ID', '<span class="mono">' + esc(l.reqId) + '</span>'],
       ['时间', dfFull.format(l.ts)],
@@ -847,7 +931,7 @@ a { color: var(--accent); }
       ['总耗时 / 首字', fmtMs(l.durationMs) + ' / ' + fmtMs(l.ttftMs)],
       ['错误', err],
       ['上游报告的上下文', l.contextTokens == null ? '-' : l.contextTokens.toLocaleString()],
-      ['输入 / 缓存读 / 缓存写 / 输出', tokens],
+      ['总输入 / 缓存读 / 缓存写 / 输出', tokens + ' <span class="sub">' + esc(source) + '</span>'],
       ['credits', credits],
       ['空流重试', l.emptyAttempts + ' 次'],
       ['限速等待', (l.throttleRetries || 0) + ' 次重试，共等 ' + fmtMs(l.throttleWaitMs || 0)],
@@ -869,6 +953,7 @@ a { color: var(--accent); }
     if (!lItems.length) { $('lRows').innerHTML = '<tr><td colspan="12" class="empty">没有符合条件的请求</td></tr>'; return; }
     $('lRows').innerHTML = lItems.map(function (l) {
       var sub = [protoOf(l.path), l.stream ? '流式' : '非流式', reasoningOf(l)].filter(Boolean).join(' · ');
+      var est = l.accounting === 'local' ? '' : ' est';
       var row = '<tr class="r' + (lOpenId === l.id ? ' open' : '') + '" data-id="' + l.id + '">'
         + '<td>' + fmtLogTime(l.ts) + '</td>'
         + '<td>' + esc(l.accountName || '-') + '</td>'
@@ -876,9 +961,9 @@ a { color: var(--accent); }
         + '<td>' + statusCell(l) + '</td>'
         + '<td class="n' + (l.durationMs > 60000 ? ' slow' : '') + '">' + fmtMs(l.durationMs) + '</td>'
         + '<td class="n' + (l.ttftMs > 5000 ? ' slow' : '') + '">' + fmtMs(l.ttftMs) + '</td>'
-        + '<td class="n">' + fmtTok(l.inputTokens) + '</td>'
-        + '<td class="n est">' + fmtTok(l.cacheReadTokens) + '</td>'
-        + '<td class="n est">' + fmtTok(l.cacheWriteTokens) + '</td>'
+        + '<td class="n">' + fmtTok(l.inputTokens == null ? null : promptOf(l)) + '</td>'
+        + '<td class="n' + est + '">' + fmtTok(l.cacheReadTokens) + '</td>'
+        + '<td class="n' + est + '">' + fmtTok(l.cacheWriteTokens) + '</td>'
         + '<td class="n">' + fmtTok(l.outputTokens) + '</td>'
         + '<td class="n">' + fmtCredits(l.credits, 3) + '</td>'
         + '<td>' + esc(clientOf(l.userAgent)) + '<div class="sub mono">' + esc(l.clientIp || '') + '</div></td>'
@@ -887,8 +972,69 @@ a { color: var(--accent); }
     }).join('');
   }
 
+  var lBucketMs = 3600000;
+  function renderChart(buckets, bucket) {
+    var b = rangeBounds();
+    var tz = -new Date().getTimezoneOffset() * 60000;
+    var end = b.until || Date.now();
+    var byStart = {};
+    buckets.forEach(function (x) { byStart[x.start] = x; });
+    var cols = [];
+    for (var t = Math.floor((b.since + tz) / bucket.ms) * bucket.ms - tz; t < end && cols.length < 400; t += bucket.ms) {
+      cols.push(byStart[t] || { start: t, requests: 0, credits: 0, inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, failed: 0 });
+    }
+    lBucketMs = bucket.ms;
+    var max = 0;
+    cols.forEach(function (c) { if (c.credits > max) max = c.credits; });
+    var label = function (ts) {
+      if (bucket.name === 'day') return dfDay.format(ts);
+      return end - b.since > DAY ? dfMinute.format(ts) : dfHour.format(ts);
+    };
+    $('lChart').innerHTML = cols.length ? cols.map(function (c) {
+      var total = promptOf(c);
+      var tip = label(c.start) + '\\n' + c.requests + ' 次请求' + (c.failed ? '（失败 ' + c.failed + '）' : '')
+        + '\\ncredits ' + c.credits.toFixed(2) + '\\n缓存命中 ' + pct(c.cacheReadTokens, total) + '\\n总输入 ' + fmtTok(total) + ' · 输出 ' + fmtTok(c.outputTokens);
+      var h = max > 0 ? Math.max(c.credits / max * 100, c.requests ? 1 : 0) : 0;
+      var hit = total ? '<b style="bottom:calc(' + (c.cacheReadTokens / total * 100).toFixed(1) + '% - 2px)"></b>' : '';
+      return '<div class="col" data-start="' + c.start + '" title="' + esc(tip) + '"><i style="height:' + h.toFixed(1) + '%"></i>' + hit + '</div>';
+    }).join('') : '<div class="empty" style="width:100%">没有数据</div>';
+    var marks = cols.length ? [cols[0], cols[Math.floor((cols.length - 1) / 2)], cols[cols.length - 1]] : [];
+    $('lAxis').innerHTML = marks.map(function (c) { return '<span>' + esc(label(c.start)) + '</span>'; }).join('');
+  }
+  function renderAccounts(rows) {
+    $('lAccts').innerHTML = rows.length ? rows.map(function (a) {
+      var total = promptOf(a);
+      return '<tr><td>' + esc(a.accountName) + '</td>'
+        + '<td class="n">' + a.requests.toLocaleString() + '</td>'
+        + '<td class="n">' + a.failed + '</td>'
+        + '<td class="n">' + fmtTok(total) + '</td>'
+        + '<td class="n">' + pct(a.cacheReadTokens, total) + '</td>'
+        + '<td class="n">' + fmtTok(a.outputTokens) + '</td>'
+        + '<td class="n">' + a.credits.toFixed(2) + '</td>'
+        + '<td class="n">' + a.coldRequests + '</td>'
+        + '<td class="n">' + fmtMs(a.avgTtftMs) + '</td></tr>';
+    }).join('') : '<tr><td colspan="9" class="empty">这个范围里没有请求</td></tr>';
+  }
   function loadSummary() {
-    return api('GET', '/logs/summary' + logQuery(false)).then(renderCards);
+    renderWindow();
+    var bucket = bucketOf(rangeBounds());
+    return Promise.all([
+      api('GET', '/logs/summary' + logQuery(false)).then(renderCards),
+      api('GET', '/logs/series' + logQuery(false, { bucket: bucket.name, tz: -new Date().getTimezoneOffset() }))
+        .then(function (r) { renderChart(r.buckets, bucket); }),
+      api('GET', '/logs/accounts' + logQuery(false)).then(function (r) { renderAccounts(r.accounts); })
+    ]);
+  }
+  function setRange(r) {
+    lRange = r;
+    document.querySelectorAll('#lRange button').forEach(function (x) { x.classList.toggle('active', x.getAttribute('data-range') === r); });
+    $('lCustom').classList.toggle('hidden', r !== 'custom');
+    if (r === 'custom') {
+      $('lFrom').value = toLocalInput(lCustom.since);
+      $('lTo').value = lCustom.until ? toLocalInput(lCustom.until) : '';
+    }
+    lPage = 0; lOpenId = null;
+    loadLogs();
   }
   function loadLogRows() {
     return api('GET', '/logs' + logQuery(true)).then(function (r) {
@@ -925,9 +1071,26 @@ a { color: var(--accent); }
   $('lRows').innerHTML = '<tr><td colspan="12" class="empty">加载中…</td></tr>';
   $('lRange').addEventListener('click', function (ev) {
     var b = ev.target.closest('button'); if (!b) return;
-    lRange = b.getAttribute('data-range');
-    this.querySelectorAll('button').forEach(function (x) { x.classList.toggle('active', x === b); });
-    loadSummary().catch(logError);
+    var r = b.getAttribute('data-range');
+    if (r === 'custom' && lRange !== 'custom') {
+      var cur = rangeBounds();
+      lCustom = { since: cur.since, until: cur.until };
+    }
+    setRange(r);
+  });
+  $('lApply').onclick = function () {
+    var from = $('lFrom').value ? new Date($('lFrom').value).getTime() : NaN;
+    var to = $('lTo').value ? new Date($('lTo').value).getTime() : undefined;
+    if (!isFinite(from)) { toast('请填开始时间'); return; }
+    if (to !== undefined && !(to > from)) { toast('结束时间要晚于开始时间'); return; }
+    lCustom = { since: from, until: to };
+    setRange('custom');
+  };
+  $('lChart').addEventListener('click', function (ev) {
+    var col = ev.target.closest('.col'); if (!col) return;
+    var start = Number(col.getAttribute('data-start'));
+    lCustom = { since: start, until: start + lBucketMs };
+    setRange('custom');
   });
   ['lAccount', 'lModel'].forEach(function (id) {
     $(id).addEventListener('change', function () { lPage = 0; lOpenId = null; loadLogs(); });

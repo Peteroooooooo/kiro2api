@@ -9,6 +9,7 @@ import type { UsageFinishEvent } from '@kiro2claude/plugin-api';
 import type { AxiosResponse } from 'axios';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { notePromptServed } from '../../src/kiro/prompt-cache.js';
 import type { KiroProvider } from '../../src/kiro/provider.js';
 import { ProviderError } from '../../src/kiro/provider-error.js';
 import { HookBus } from '../../src/plugin-host/index.js';
@@ -60,12 +61,12 @@ function fakeDerived(event: UsageFinishEvent): void {
 let app: FastifyInstance | undefined;
 let entries: NewRequestLogEntry[] = [];
 
-async function start(upstream: Upstream): Promise<string> {
+async function start(upstream: Upstream, opts: { derived?: boolean } = {}): Promise<string> {
   entries = [];
   setRequestLogSink((draft) => entries.push(entryFromDraft(draft, (id) => `name-${id}`)));
   app = Fastify({ logger: false });
   const hookBus = new HookBus();
-  hookBus.registerUsageFinish('derived', fakeDerived);
+  if (opts.derived !== false) hookBus.registerUsageFinish('derived', fakeDerived);
   hookBus.registerUsageFinish('core:request-log', (event) => {
     noteRequestLog({ usage: requestLogUsage(event) });
   });
@@ -165,6 +166,61 @@ describe('request log end to end', () => {
     expect(e.outputTokens).toBeGreaterThan(0);
     expect(e.ttftMs).toBeGreaterThanOrEqual(0);
     expect(e.durationMs).toBeGreaterThanOrEqual(e.ttftMs ?? 0);
+  });
+
+  it('local accounting: second turn reads the first from cache; wire and log agree', async () => {
+    const frames = framesWithMetering(METERING, 'hello');
+    const served = async (body: string) => {
+      notePromptServed('e2e-local', body);
+      return response(Buffer.concat(frames));
+    };
+    const base = await start({ callApi: served }, { derived: false });
+    const turn1 = messages(false, { messages: [{ role: 'user', content: 'hi' }] });
+    const turn2 = messages(false, {
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+        { role: 'user', content: 'and now?' },
+      ],
+    });
+    const wire1 = (await (await post(base, turn1)).json()).usage;
+    await vi.waitFor(() => expect(entries).toHaveLength(1));
+    const wire2 = (await (await post(base, turn2)).json()).usage;
+    await vi.waitFor(() => expect(entries).toHaveLength(2));
+    const [e1, e2] = entries as [NewRequestLogEntry, NewRequestLogEntry];
+
+    expect(e1).toMatchObject({ accounting: 'local', inputTokens: 0, cacheReadTokens: 0 });
+    expect(e1.cacheWriteTokens).toBe(e1.contextTokens);
+    expect(e2.accounting).toBe('local');
+    expect(e2.cacheReadTokens).toBeGreaterThan(0);
+    expect((e2.cacheReadTokens ?? 0) + (e2.cacheWriteTokens ?? 0)).toBe(e2.contextTokens);
+    for (const [wire, e] of [
+      [wire1, e1],
+      [wire2, e2],
+    ] as const) {
+      expect(wire).toMatchObject({
+        input_tokens: 0,
+        cache_read_input_tokens: e.cacheReadTokens,
+        cache_creation_input_tokens: e.cacheWriteTokens,
+        output_tokens: e.outputTokens,
+      });
+    }
+  });
+
+  it('local accounting: a plugin override wins on the wire but not in the log', async () => {
+    const frames = framesWithMetering(METERING, 'hello');
+    const base = await start({
+      callApiStream: async (body: string) => {
+        notePromptServed('e2e-override', body);
+        return response(slowStream(frames, 0));
+      },
+    });
+    const res = await post(base, messages(true));
+    const text = await res.text();
+    expect(text).toContain('"cache_read_input_tokens":80');
+    const e = await oneEntry();
+    expect(e).toMatchObject({ accounting: 'local', inputTokens: 0, cacheReadTokens: 0 });
+    expect(e.cacheWriteTokens).toBe(e.contextTokens);
   });
 
   it('non-stream success records the stop reason and no first-token time', async () => {

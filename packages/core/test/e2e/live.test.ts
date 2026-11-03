@@ -202,8 +202,8 @@ describe.skipIf(!HAS_ENV)('live E2E: kiro2claude end-to-end', () => {
       expect(body.stop_reason).toBe('end_turn');
       expect(firstTextAfterThinking(body.content)).toMatch(/2/);
       // kiro-cli disguise system prompt injected by converter => total input > 1000 tokens.
-      // OFF 模式（默认）反演覆盖把 `input_tokens` 当成 uncached only，cache 命中时
-      // 可能为 0；总 input 必须包含 cache_* 三项之和(见 plugin-derived README)。
+      // 网关本地记账把 prompt 全部分进 cache_read / cache_creation,`input_tokens` 为 0;
+      // 总 input 必须取三项之和(见 kiro/prompt-cache.ts)。
       const totalInput =
         body.usage.input_tokens +
         (body.usage.cache_creation_input_tokens ?? 0) +

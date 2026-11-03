@@ -75,6 +75,94 @@ export function countTokens(text: string): number {
   return Math.floor(accToken);
 }
 
+/**
+ * Per-feature token weights fitted against the upstream's own count (2026-11-04, claude-opus-5.5,
+ * 16 input samples + 4 echoed outputs: code, Chinese/English docs, JSON, YAML, base64, digits,
+ * indentation). RMS error 7 %; the older chars/4 heuristic is off by 50 % on the same set and
+ * undercounts output 1.4–1.9×. Units are the upstream's: the same ones `contextUsage` and
+ * credits are computed in. Weights not listed here fitted to 0 (word length, single spaces);
+ * other non-ASCII characters are given 1 token each, which the sample set barely covered.
+ */
+const TOKEN_WEIGHTS = {
+  cjk: 1.133,
+  /** A run of ASCII letters. */
+  word: 1.927,
+  digit: 0.451,
+  punct: 0.805,
+  newline: 2.062,
+  /** lower → upper inside a word (camelCase, base64). */
+  caseStep: 3.12,
+  other: 1,
+};
+
+type CharClass = 'cjk' | 'letter' | 'digit' | 'space' | 'newline' | 'punct' | 'other';
+
+function isCjk(code: number): boolean {
+  return (
+    (code >= 0x2e80 && code <= 0x9fff) ||
+    (code >= 0xac00 && code <= 0xd7af) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xff00 && code <= 0xffef)
+  );
+}
+
+/**
+ * Running token count for text that arrives in pieces (a stream). Word and case runs carry
+ * over between pieces, so chunking does not change the total.
+ */
+export class TokenTally {
+  #units = 0;
+  #chars = 0;
+  #prev: CharClass | undefined;
+  #prevUpper = false;
+
+  add(text: string): void {
+    const w = TOKEN_WEIGHTS;
+    for (const c of text) {
+      const code = c.codePointAt(0) ?? 0;
+      this.#chars++;
+      let cls: CharClass;
+      if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
+        const upper = code <= 90;
+        if (this.#prev !== 'letter') this.#units += w.word;
+        else if (upper && !this.#prevUpper) this.#units += w.caseStep;
+        this.#prevUpper = upper;
+        cls = 'letter';
+      } else if (code >= 48 && code <= 57) {
+        this.#units += w.digit;
+        cls = 'digit';
+      } else if (code === 10) {
+        this.#units += w.newline;
+        cls = 'newline';
+      } else if (code === 32 || code === 9 || code === 13) {
+        cls = 'space';
+      } else if (code < 128) {
+        this.#units += w.punct;
+        cls = 'punct';
+      } else if (isCjk(code)) {
+        this.#units += w.cjk;
+        cls = 'cjk';
+      } else {
+        this.#units += w.other;
+        cls = 'other';
+      }
+      this.#prev = cls;
+    }
+  }
+
+  /** 0 only when nothing was added; any text counts as at least 1. */
+  get tokens(): number {
+    return this.#chars === 0 ? 0 : Math.max(1, Math.round(this.#units));
+  }
+}
+
+/** Token count in the upstream's units, see {@link TokenTally}. */
+export function countUpstreamTokens(text: string): number {
+  const tally = new TokenTally();
+  tally.add(text);
+  return tally.tokens;
+}
+
 /** 调用远程 count_tokens API */
 async function callRemoteCountTokens(
   apiUrl: string,
@@ -186,18 +274,15 @@ function countAllTokensLocal(
   return Math.max(total, 1);
 }
 
-/** 估算输出 tokens */
+/** 估算输出 tokens(text、thinking、tool_use 入参),口径见 {@link TokenTally}。 */
 export function estimateOutputTokens(content: Record<string, unknown>[]): number {
-  let total = 0;
+  const tally = new TokenTally();
 
   for (const block of content) {
-    if (typeof block.text === 'string') {
-      total += countTokens(block.text);
-    }
-    if (block.type === 'tool_use' && block.input) {
-      total += countTokens(JSON.stringify(block.input));
-    }
+    if (typeof block.text === 'string') tally.add(block.text);
+    if (typeof block.thinking === 'string') tally.add(block.thinking);
+    if (block.type === 'tool_use' && block.input) tally.add(JSON.stringify(block.input));
   }
 
-  return Math.max(total, 1);
+  return Math.max(tally.tokens, 1);
 }

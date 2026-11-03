@@ -84,6 +84,7 @@ import { getRequestContext } from '../shared/request-context.js';
 import { noteThrottleRetry } from '../shared/request-log.js';
 import type { KiroCredentials } from './model/credentials.js';
 import { stripReasoningContent } from './model/requests/kiro.js';
+import { notePromptServed } from './prompt-cache.js';
 import {
   classifyErrorBody,
   isBearerTokenInvalidBody,
@@ -270,6 +271,7 @@ export class RetryExecutor {
           used,
         );
         this.tokenManager.reportOutcome(used.ctx?.accountId, { kind: 'success', model });
+        notePromptServed(used.ctx?.accountId, req.body);
         if (throttled > 0) {
           getLogger().info({
             msg: 'throttle retry succeeded on the same account',

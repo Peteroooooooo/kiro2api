@@ -92,10 +92,27 @@ describe('admin request log API', () => {
     expect((await get('/admin/api/connection')).json().requestLog).toBe(true);
   });
 
+  it('series and per-account totals', async () => {
+    await build(true);
+    const s = (await get('/admin/api/logs/series?bucket=5m&since=1000&until=3000')).json();
+    expect(s.bucketMs).toBe(300_000);
+    expect(s.buckets).toEqual([expect.objectContaining({ start: 0, requests: 2, failed: 1 })]);
+    // Minutes east of UTC: +60 shifts the bucket edge one hour back from UTC midnight.
+    const day = (await get('/admin/api/logs/series?bucket=day&tz=60')).json();
+    expect(day.buckets.map((b: { start: number }) => b.start)).toEqual([-3_600_000]);
+    expect((await get('/admin/api/logs/series?tz=junk')).json().bucketMs).toBe(3_600_000);
+    const accts = (await get('/admin/api/logs/accounts?model=claude-opus-5-5')).json();
+    expect(accts.accounts).toEqual([
+      expect.objectContaining({ accountId: 'a1', accountName: '主号', requests: 2, failed: 1 }),
+    ]);
+  });
+
   it('reports the log as disabled when there is no store', async () => {
     await build(false);
     expect((await get('/admin/api/logs')).statusCode).toBe(404);
     expect((await get('/admin/api/logs/summary')).statusCode).toBe(404);
+    expect((await get('/admin/api/logs/series')).statusCode).toBe(404);
+    expect((await get('/admin/api/logs/accounts')).statusCode).toBe(404);
     expect((await get('/admin/api/connection')).json().requestLog).toBe(false);
   });
 });

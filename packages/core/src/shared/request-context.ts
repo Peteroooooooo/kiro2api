@@ -37,6 +37,12 @@ export interface RequestContext {
   closed?: boolean;
   /** Admin request-log record being filled in; only set on model routes (see `shared/request-log.ts`). */
   requestLog?: RequestLogDraft;
+  /**
+   * Share of this request's prompt the account's upstream cache already held, set when the
+   * upstream accepted the request (`kiro/prompt-cache.ts`). Units are local estimates; only
+   * the ratio is used.
+   */
+  promptCache?: { read: number; total: number };
 }
 
 export const requestContextStorage = new AsyncLocalStorage<RequestContext>();

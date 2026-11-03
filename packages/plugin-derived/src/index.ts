@@ -25,12 +25,13 @@ function parseEnvNumber(raw: string | undefined): number | undefined {
  * from Kiro credit metering. Plugin name (`derived`) matches the wire field it
  * injects (`usage.kiro_derived`).
  *
- * Wire injection modes (controlled by KIRO2CLAUDE_DERIVED_INCLUDE_FIELD):
- *   - default (or 'false'): override input_tokens / cache_creation_input_tokens /
- *     cache_read_input_tokens with derived values so downstream SDKs can
- *     compute cost via Anthropic standard pricing.
- *   - 'true': leave standard fields alone, add `kiro_derived` extension
- *     containing the full breakdown for diagnostic / markup deployments.
+ * Wire injection modes:
+ *   - default: nothing. The host fills input_tokens / cache_* from its own prompt-cache
+ *     accounting (`kiro/prompt-cache.ts`), which does not depend on the output estimate.
+ *   - KIRO2CLAUDE_DERIVED_OVERRIDE=true: override input_tokens / cache_creation_input_tokens /
+ *     cache_read_input_tokens with the credit inversion (the pre-local-accounting behaviour).
+ *   - KIRO2CLAUDE_DERIVED_INCLUDE_FIELD=true: add a `kiro_derived` extension containing the
+ *     full breakdown for diagnostic / markup deployments. Takes precedence over OVERRIDE.
  *
  * Independent of the `metering` plugin: derivation reads the host's
  * `kiro.creditsUsed` meta key (always present), not metering's wire output, so
@@ -76,6 +77,14 @@ class DerivedPlugin extends BasePlugin {
     }
 
     const includeField = parseEnvBool(ctx.env.KIRO2CLAUDE_DERIVED_INCLUDE_FIELD);
+    const override = !includeField && parseEnvBool(ctx.env.KIRO2CLAUDE_DERIVED_OVERRIDE);
+    if (!includeField && !override) {
+      ctx.logger.info(
+        { includeField, override },
+        'plugin-derived: idle — usage token fields come from the gateway cache accounting',
+      );
+      return;
+    }
 
     ctx.registerHook.onUsageFinish((event) => {
       const credits = event.getMeta<number>('kiro.creditsUsed');
@@ -105,8 +114,7 @@ class DerivedPlugin extends BasePlugin {
         // Diagnostic mode: leave standard fields, expose breakdown as extension.
         event.addExtension('kiro_derived', breakdown.derived);
       } else {
-        // Production mode: override standard Anthropic fields so downstream
-        // SDKs see derived cache shape.
+        // Override mode: standard Anthropic fields carry the credit inversion.
         event.overrideStandardField(
           'input_tokens',
           breakdown.inputTokens,
@@ -125,7 +133,10 @@ class DerivedPlugin extends BasePlugin {
       }
     });
 
-    ctx.logger.info({ multiplier, includeField }, 'plugin-derived: registered usage-finish hook');
+    ctx.logger.info(
+      { multiplier, includeField, override },
+      'plugin-derived: registered usage-finish hook',
+    );
   }
 }
 

@@ -16,7 +16,7 @@ import { getLogger } from './logger.js';
 import { getRequestContext } from './request-context.js';
 
 export interface RequestLogUsage {
-  /** Uncached input (plugin-derived when credits are known, else the raw upstream count). */
+  /** Uncached input; 0 under local accounting, where every prompt token is a cache read or write. */
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -25,6 +25,12 @@ export interface RequestLogUsage {
   contextTokens: number;
   credits?: number;
   meteringLost: boolean;
+  /**
+   * Where the input / cache split came from: the gateway's own cache model (`local`), the
+   * derived plugin's credit inversion (`derived`, also every row logged before local
+   * accounting), or neither (`raw`: whole context as input).
+   */
+  accounting?: 'local' | 'derived' | 'raw';
 }
 
 export interface RequestLogDraft {

@@ -1,12 +1,12 @@
 # plugin-derived
 
-> **内置 runtime 插件**(作为 `@kiro2claude/core` 的依赖随镜像默认启用):通过 [`@kiro2claude/plugin-api`](../plugin-api/) 接入 core gateway,把 Kiro 原始 credit 反演成 Anthropic 风格的 token 拆分。默认直接覆写标准 token 字段;诊断模式下注入的扩展字段 `usage.kiro_derived` 与 plugin 名(`derived`)一致。
+> **内置 runtime 插件**(作为 `@kiro2claude/core` 的依赖随镜像默认启用):通过 [`@kiro2claude/plugin-api`](../plugin-api/) 接入 core gateway,把 Kiro 原始 credit 反演成 Anthropic 风格的 token 拆分。**默认不工作**:标准 token 字段由 core 自己的缓存记账填(`packages/core/src/kiro/prompt-cache.ts`,见 docs/PITFALLS.md「上游 prompt 缓存与本地记账」)。`KIRO2CLAUDE_DERIVED_OVERRIDE=true` 恢复用反演覆写标准字段;诊断模式下注入的扩展字段 `usage.kiro_derived` 与 plugin 名(`derived`)一致。
 
 ## 解决什么问题
 
 Kiro 上游的计量帧(`meteringEvent.usage`)只给一个聚合 credit 数,缺失下游 Anthropic 客户端期望的 `cache_creation_input_tokens` / `cache_read_input_tokens` 拆分。本 plugin 在 `onUsageFinish` hook 里读 `'kiro.creditsUsed'`,按 `'kiro.pricedModel'`(core 映射后的上游 id)查价,基于回归拟合常数(`KIRO_K_IN` / `KIRO_K_OUT`)反演 cache 字段:
 
-- 默认:`overrideStandardField` 覆写 `input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens`(OpenAI 端点只取 `cache_read`,映射成 `cached_tokens`)
+- `KIRO2CLAUDE_DERIVED_OVERRIDE=true`:`overrideStandardField` 覆写 `input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens`(OpenAI 端点只取 `cache_read`,映射成 `cached_tokens`)
 - `KIRO2CLAUDE_DERIVED_INCLUDE_FIELD=true`(诊断):标准字段不动,改以 `addExtension('kiro_derived', …)` 暴露完整拆分,形状见 `src/derive.ts` 的 `KiroDerivedMetadata`,`derivedStatus` 取值 `ok_derived` / `below_threshold` / `unknown_model` / `gpt_credit_anchored`
 
 Kiro 按上游倍率计价,与 Anthropic 标价不总在一条线上:偏离倍率线的模型反演改用 `KIRO_BILLING`(可带未命中溢价,只作用于 prompt、不作用于本轮输出),按 prompt 长度整单加价的(haiku-5.5 超 100K ×5)进 `LONG_CONTEXT_TIER`;收录的模型与系数以 `src/derive.ts` 为准,证据见 docs/PITFALLS.md「支持哪些模型」。
@@ -36,7 +36,8 @@ credits = 倍率 × [ GPT_K_IN · (未命中 + 0.1 · 命中) + GPT_K_OUT · 输
 
 | 变量 | 默认 | 作用 |
 |---|---|---|
-| `KIRO2CLAUDE_DERIVED_INCLUDE_FIELD` | `false` | `true` 时不覆写标准字段,改注入 `usage.kiro_derived` |
+| `KIRO2CLAUDE_DERIVED_OVERRIDE` | `false` | `true` 时用 credit 反演覆写标准 token 字段(本地记账之前的行为) |
+| `KIRO2CLAUDE_DERIVED_INCLUDE_FIELD` | `false` | `true` 时不覆写标准字段,改注入 `usage.kiro_derived`;优先于 OVERRIDE |
 | `KIRO2CLAUDE_COST_MULTIPLIER` | `1.0` | `kiro_derived.finalCostUsd` 的倍率,只在诊断模式可见 |
 | `KIRO2CLAUDE_CACHE_READ_RATIO` | `KIRO_CACHE_READ_RATIO` | Claude 模型的 cache 反演比例旋钮,只接受 `[0,1)` |
 

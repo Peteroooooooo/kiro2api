@@ -143,6 +143,8 @@ event.overrideStandardField('input_tokens', 1234, 'reason for override');
 
 `StandardUsageField` 为 `'input_tokens' | 'output_tokens' | 'cache_creation_input_tokens' | 'cache_read_input_tokens'`。
 
+没有插件覆写时,core 用自己的缓存记账填这几个字段(`packages/core/src/kiro/prompt-cache.ts`):`input_tokens` = 0,prompt 全部分进 `cache_read_input_tokens` / `cache_creation_input_tokens`。覆写在 wire 上优先;admin 请求日志只记 core 自己的数,不读覆写。
+
 ### 来源感知
 
 `event.source` 标识网关路径,当前恒为:

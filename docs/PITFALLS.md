@@ -286,6 +286,27 @@ KAS 形态:assistant 侧 `{content, toolUses:[{toolUseId,name,input}], reasoning
 
 守卫:`test/static/no-thinking-tag-stitching.test.ts`、`test/claude/converter-reasoning-content.test.ts`、`test/claude/native-effort-integrity.test.ts`、`test/kiro/retry-executor-thinking-signature.test.ts`。
 
+### 上游 prompt 缓存与本地记账
+
+上游的 usage 里没有缓存字段,只报 contextUsage 百分比和 credits。2026-11-03/04 在 claude-opus-5.5 上用探针实测(请求直发 `/claude/v1/messages`,读 credits 与 request log):
+
+- **缓存归账号、按内容匹配**。同一账号换一个随机 conversationId 发同样的前缀照样命中;换账号必定不命中。GPT 不同,只在同一 conversationId 里命中(见「GPT credit 锚定与缓存反演」)。
+- **命中的是消息边界上的最长前缀**。`[u1]` 之后发 `[u1, a1, u2]` 能读到 `u1` 那一段;工具定义那一段有时单独命中;Kiro 自己的约 1900 token 基础提示看起来常驻。也见过说不清的个例:一次中途分叉没命中、一次整段命中,本地模型不追这些。
+- **寿命约 5 分钟,读一次续一次**。间隔超过 5 分钟的每一次都是整段未命中。网关不发保活请求(用户决定:为了缓存定时打上游不值得)。
+- **opus-5.5 的单价**(credits/token,三组探针反解一致):未命中 = 写入 ≈ 1.227e-5,命中 ≈ 3.333e-6(约 0.27×),输出 ≈ 2.215e-4。plugin-derived 里 opus-5.5 的输出系数比这高 1.72×。
+- **contextUsage 换算出的 T = prompt + 本轮输出**,单位就是计费单位:用 `T − 输出` 当 prompt 去对 credits,比值恒定。
+
+旧做法用 credits 反推缓存拆分(plugin-derived 覆写标准字段)。它对输出估算极敏感:每差 1 个输出 token,反推出的缓存数要动约 25 个。网关原来的输出估算(字符数 / 4)比上游的真实输出少 1.4–1.9×,再叠上偏高的输出系数,request log 里出现了「每轮都写 35–90K 缓存」的假象,实际命中率比页面显示的高。
+
+现在的做法(`kiro/prompt-cache.ts`):
+
+- **输出**用 `TokenTally`(`token.ts`)计:按字符类别加权(单词、驼峰切换、数字、换行、中日韩字符、标点),权重对着上游自己报的数拟合(16 个输入样本 + 4 个回显输出,RMS 误差 7%,字符数 / 4 是 50%)。流式按块累加,分块方式不影响结果。
+- **prompt 总量** = T − 本地输出;拿不到 contextUsage 时用请求侧估算。
+- **拆分**:请求被上游接受时(`RetryExecutor` 成功分支 `notePromptServed`),按账号 + 模型(GPT 再加 conversationId)查最近 5 分钟发过的前缀哈希(工具 → 每条 history → 当前消息,当前消息和它下一轮作为 history 重放时哈希相同),最长命中段占本次 prompt 的比例 × prompt 总量 = 缓存读,其余 = 缓存写,`input_tokens` = 0(未命中与写入同价,全记成写)。
+- wire 上插件覆写仍优先(`KIRO2CLAUDE_DERIVED_OVERRIDE=true` 恢复旧行为);admin 请求日志只记本地数,`accounting` 列标来源,改版前的行是 `NULL`(页面按「credits 反推」灰显)。
+
+本地模型只看本网关发过什么,所以它会漏掉:进程重启后的第一轮(实际可能命中)、同一账号被别的客户端用过的前缀。它会多算的:上游个别没命中的分叉。复核方法:按上面的单价用 `缓存读 × 3.333e-6 + 缓存写 × 1.227e-5 + 输出 × 2.215e-4` 去对 `credits`,看偏差。
+
 ### 支持哪些模型 / 加模型要同改的地方
 
 `claude/models-catalog.ts` + `mapModel()`。
