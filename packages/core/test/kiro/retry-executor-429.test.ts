@@ -271,6 +271,7 @@ describe('accountOutcomeOf — which account a failure belongs to', () => {
     expect(accountOutcomeOf(rate(body), 'claude-opus-5.5')).toEqual({
       kind: 'capacity',
       model: 'claude-opus-5.5',
+      retryAfterSeconds: undefined,
     });
   });
 
@@ -279,7 +280,11 @@ describe('accountOutcomeOf — which account a failure belongs to', () => {
       { kind: 'overloaded', status: 500, reason: 'MODEL_TEMPORARILY_UNAVAILABLE' },
       '',
     );
-    expect(accountOutcomeOf(err, 'm')).toEqual({ kind: 'capacity', model: 'm' });
+    expect(accountOutcomeOf(err, 'm')).toEqual({
+      kind: 'capacity',
+      model: 'm',
+      retryAfterSeconds: undefined,
+    });
   });
 
   it('a generic transient 5xx is not account-scoped', () => {

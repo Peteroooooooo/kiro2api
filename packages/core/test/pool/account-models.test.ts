@@ -125,13 +125,13 @@ describe('AccountPool model filtering', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it('accounts that offer the model are all cooling: 429 with their soonest retry', async () => {
+  it('accounts that offer the model are all out of rotation: 429 with their soonest retry', async () => {
     const pool = makePool([account('free', FREE), account('pro', PRO)]);
-    pool.reportOutcome('pro', { kind: 'rate_limited', retryAfterSeconds: 30 });
+    pool.reportOutcome('pro', { kind: 'unauthorized' });
     const err = await pool.acquireContext({ model: 'claude-opus-5.5' }).catch((e) => e);
     expect((err as ProviderError).kind).toMatchObject({ kind: 'rate_limited' });
     expect(((err as ProviderError).kind as { retryAfterSeconds: number }).retryAfterSeconds).toBe(
-      30,
+      600,
     );
   });
 

@@ -33,6 +33,8 @@ export interface RequestContext {
    * onRequest hook), so a streaming response keeps counting until it ends.
    */
   poolLease?: { accountId: string; release(): void };
+  /** Set when the HTTP connection closed (done or client gone); a throttle wait stops then. */
+  closed?: boolean;
   /** Admin request-log record being filled in; only set on model routes (see `shared/request-log.ts`). */
   requestLog?: RequestLogDraft;
 }

@@ -393,7 +393,7 @@ a { color: var(--accent); }
         : a.status === 'cooling' ? '<span class="chip cooling">冷却中</span><div class="sub">' + esc(a.cooldownReason) + '，' + fmtUntil(a.cooldownUntil) + '后恢复</div>'
         : '<span class="chip disabled">已停用</span>' + (a.disabledReason ? '<div class="sub">' + esc(a.disabledReason) + '</div>' : '');
       if (a.stats.lastError && a.status === 'ok') st += '<div class="sub" title="' + esc(a.stats.lastError) + '">上次错误 ' + fmtTime(a.stats.lastErrorAt) + '</div>';
-      if (a.modelCooldowns) Object.keys(a.modelCooldowns).forEach(function (m) { st += '<div class="sub">' + esc(m) + ' 容量冷却，' + fmtUntil(a.modelCooldowns[m]) + '后恢复</div>'; });
+      if (a.throttles) a.throttles.forEach(function (t) { st += '<div class="sub">' + (t.model ? esc(t.model) + ' ' : '') + '限速退避，' + fmtUntil(t.until) + '后重试（不换号）</div>'; });
       if (a.inflight) st += '<div class="sub">在途 ' + a.inflight + '</div>';
       var q = '-';
       if (a.quota) {
@@ -850,6 +850,7 @@ a { color: var(--accent); }
       ['输入 / 缓存读 / 缓存写 / 输出', tokens],
       ['credits', credits],
       ['空流重试', l.emptyAttempts + ' 次'],
+      ['限速等待', (l.throttleRetries || 0) + ' 次重试，共等 ' + fmtMs(l.throttleWaitMs || 0)],
       ['调用的工具', l.toolNames ? esc(l.toolNames.join('、')) : '-'],
       ['客户端断开', l.clientDisconnected ? '是' : '否'],
       ['客户端 IP', '<span class="mono">' + esc(l.clientIp || '-') + '</span>'],

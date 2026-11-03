@@ -23,14 +23,17 @@
  *    signature upstream accepts; the 400 arrives before any stream, so this is
  *    always pre-commit. Bodies with no reasoningContent are not retried.
  *
- * With an account pool there is one more: a failure that belongs to the
- * account (account-scoped 429, quota exhausted, unauthorized after the refresh
- * retry) moves the whole request to the next account, at most once per account
- * (`accountOutcomeOf`). A model-capacity error (429 `INSUFFICIENT_MODEL_CAPACITY`
- * or 5xx `overloaded`) moves it to **one** other account at most
- * (`poolCapacityFailover`, default on); a second capacity answer is forwarded
- * as-is. All of this happens before any byte goes downstream. With a single
- * credential the failover capacity is 1 and nothing changes.
+ * With an account pool there is one more rule. An upstream **throttle** (429
+ * per-user rate, 429 `INSUFFICIENT_MODEL_CAPACITY`, 5xx `overloaded`) is waited
+ * out and retried on the **same** account — backing off 2 s → 4 s → 8 s … with
+ * jitter, for at most the pool's throttle budget (45 s by default) — and only
+ * then forwarded with a Retry-After. Switching accounts on a throttle does not
+ * help (11-02/11-03: the second account refused the same model within a second)
+ * and breaks the conversation's per-account prompt cache. An **account fault**
+ * (quota exhausted, unauthorized after the refresh retry) moves the request to
+ * the next account, at most once per account (`accountOutcomeOf`). All of this
+ * happens before any byte goes downstream. With a single credential there is no
+ * throttle budget and no failover, so nothing changes.
  *
  * All other error paths are single-attempt:
  *
@@ -77,6 +80,8 @@ import type { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 
 import { getLogger } from '../shared/logger.js';
+import { getRequestContext } from '../shared/request-context.js';
+import { noteThrottleRetry } from '../shared/request-log.js';
 import type { KiroCredentials } from './model/credentials.js';
 import { stripReasoningContent } from './model/requests/kiro.js';
 import {
@@ -86,18 +91,28 @@ import {
   ProviderError,
   upstreamReason,
 } from './provider-error.js';
-import type { AccountOutcome, CallContext, TokenSource } from './token-source.js';
+import type { AccountOutcome, AcquireOptions, CallContext, TokenSource } from './token-source.js';
 
 /**
- * Conversation key for pool affinity: the root conversation, so a subagent
- * stays on its parent's account. Read from the already-built Kiro body.
+ * Conversation key for pool affinity: the request's own conversation. A
+ * subagent has its own conversationId, so it sticks to one account of its own
+ * (see `extractRootKey` for where it starts). Read from the already-built Kiro body.
  */
 export function extractAffinityKey(body: string): string | undefined {
+  const state = conversationStateOf(body);
+  const key = state?.conversationId ?? state?.rootConversationId;
+  return typeof key === 'string' && key.length > 0 ? key : undefined;
+}
+
+/** Root conversation (`rootConversationId`); equals the affinity key for a main conversation. */
+export function extractRootKey(body: string): string | undefined {
+  const key = conversationStateOf(body)?.rootConversationId;
+  return typeof key === 'string' && key.length > 0 ? key : undefined;
+}
+
+function conversationStateOf(body: string): Record<string, unknown> | undefined {
   try {
-    const state = (JSON.parse(body) as { conversationState?: Record<string, unknown> })
-      .conversationState;
-    const key = state?.rootConversationId ?? state?.conversationId;
-    return typeof key === 'string' && key.length > 0 ? key : undefined;
+    return (JSON.parse(body) as { conversationState?: Record<string, unknown> }).conversationState;
   } catch {
     return undefined;
   }
@@ -233,25 +248,34 @@ export class RetryExecutor {
    */
   async execute(req: RetryableRequest): Promise<AxiosResponse> {
     const affinityKey = extractAffinityKey(req.body);
+    const rootKey = extractRootKey(req.body);
     const model = extractModelId(req.body);
     const exclude = new Set<string>();
     const capacity = this.tokenManager.failoverCapacity(model);
-    const capacityFailover = this.tokenManager.config?.().poolCapacityFailover ?? true;
-    let capacityHits = 0;
+    const budget = this.tokenManager.throttleBudgetMs?.() ?? 0;
+    const deadline = Date.now() + budget;
+    let stayOn: string | undefined;
+    let throttled = 0;
 
-    // Account failover (pool only): a failure scoped to one account moves the
-    // request to another account. Everything sent so far was rejected before a
-    // stream started, so the downstream client never sees the failed attempt.
+    // Pool only. A throttle (429 rate / capacity) waits and retries on the SAME
+    // account, within the request's wait budget; only an account fault (quota,
+    // credential) moves the request to another account. Everything here happens
+    // before a stream starts, so the client never sees the failed attempts.
     while (true) {
       const used: { ctx?: CallContext } = {};
       try {
-        const response = await this.executeOnAccount(req, { affinityKey, exclude, model }, used);
-        this.tokenManager.reportOutcome(used.ctx?.accountId, { kind: 'success' });
-        if (capacityHits > 0) {
+        const response = await this.executeOnAccount(
+          req,
+          { affinityKey, rootKey, exclude, model, stayOn, deadline },
+          used,
+        );
+        this.tokenManager.reportOutcome(used.ctx?.accountId, { kind: 'success', model });
+        if (throttled > 0) {
           getLogger().info({
-            msg: 'capacity failover succeeded',
+            msg: 'throttle retry succeeded on the same account',
             type: req.label,
             account: used.ctx?.accountId,
+            retries: throttled,
             model,
           });
         }
@@ -261,20 +285,36 @@ export class RetryExecutor {
         const outcome = accountOutcomeOf(e, model);
         if (!outcome || accountId === undefined) throw e;
         this.tokenManager.reportOutcome(accountId, outcome);
+
+        if (outcome.kind === 'rate_limited' || outcome.kind === 'capacity') {
+          const hold = this.tokenManager.holdRemainingMs?.(accountId, model) ?? 0;
+          if (budget <= 0 || getRequestContext()?.closed || Date.now() + hold > deadline) {
+            throw withRetryAfter(e, hold);
+          }
+          throttled++;
+          noteThrottleRetry();
+          stayOn = accountId;
+          getLogger().info({
+            msg: 'upstream throttled, waiting to retry on the same account',
+            type: req.label,
+            account: accountId,
+            outcome: outcome.kind,
+            model,
+            wait_ms: hold,
+            retry: throttled,
+          });
+          continue;
+        }
+
+        // Account fault: this account cannot serve the request at all.
+        stayOn = undefined;
         exclude.add(accountId);
         if (exclude.size >= capacity) throw e;
-        // Capacity: one more account at most. A second "no capacity" means the
-        // shortage is upstream-wide (踩坑「跨模型对照」) and more tries only burn time.
-        if (outcome.kind === 'capacity') {
-          capacityHits++;
-          if (!capacityFailover || capacityHits > 1) throw e;
-        }
         getLogger().info({
-          msg: 'account-scoped failure, failing over to another account',
+          msg: 'account fault, moving the request to another account',
           type: req.label,
           account: accountId,
           outcome: outcome.kind,
-          model: outcome.kind === 'capacity' ? model : undefined,
         });
       }
     }
@@ -282,7 +322,7 @@ export class RetryExecutor {
 
   private async executeOnAccount(
     req: RetryableRequest,
-    opts: { affinityKey?: string; exclude: ReadonlySet<string>; model?: string },
+    opts: AcquireOptions,
     used: { ctx?: CallContext },
   ): Promise<AxiosResponse> {
     const log = getLogger();
@@ -477,11 +517,11 @@ export class RetryExecutor {
 /**
  * Which failures belong to the account rather than the request.
  *
- * A model-capacity error (429 naming `INSUFFICIENT_MODEL_CAPACITY`, or the 5xx
- * `overloaded` kind) becomes `capacity`: the pool cools only that model on that
- * account for a few seconds and the executor tries one other account. It used to
- * be treated as upstream-wide and ignored, which kept a conversation pinned to the
- * same account/model for every client retry.
+ * Throttles — a per-user 429 and a model-capacity answer (429 naming
+ * `INSUFFICIENT_MODEL_CAPACITY`, or the 5xx `overloaded` kind) — become
+ * `rate_limited` / `capacity`: the pool puts a short back-off hold on the
+ * account (capacity: on that model only) and the executor waits and retries on
+ * the same account. `quota_exhausted` / `unauthorized` move the request.
  */
 export function accountOutcomeOf(e: unknown, model?: string): AccountOutcome | undefined {
   if (!(e instanceof ProviderError)) return undefined;
@@ -493,9 +533,9 @@ export function accountOutcomeOf(e: unknown, model?: string): AccountOutcome | u
             retryAfterSeconds: e.kind.retryAfterSeconds,
             reason: upstreamReason(e.body),
           }
-        : { kind: 'capacity', model };
+        : { kind: 'capacity', model, retryAfterSeconds: e.kind.retryAfterSeconds };
     case 'overloaded':
-      return { kind: 'capacity', model };
+      return { kind: 'capacity', model, retryAfterSeconds: e.kind.retryAfterSeconds };
     case 'quota_exhausted':
       return { kind: 'quota_exhausted' };
     case 'unauthorized':
@@ -503,6 +543,23 @@ export function accountOutcomeOf(e: unknown, model?: string): AccountOutcome | u
     default:
       return undefined;
   }
+}
+
+/**
+ * The throttle we give up on, with a Retry-After of the remaining hold when the
+ * upstream sent none — so the client backs off instead of retrying straight in.
+ */
+function withRetryAfter(e: unknown, holdMs: number): unknown {
+  if (!(e instanceof ProviderError) || holdMs <= 0) return e;
+  const k = e.kind;
+  if ((k.kind !== 'rate_limited' && k.kind !== 'overloaded') || k.retryAfterSeconds !== undefined) {
+    return e;
+  }
+  return new ProviderError(
+    { ...k, retryAfterSeconds: Math.ceil(holdMs / 1000) },
+    e.body,
+    e.message,
+  );
 }
 
 // ============================================================================

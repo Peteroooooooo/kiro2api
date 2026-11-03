@@ -344,7 +344,10 @@ async function main(): Promise<void> {
     reply.header('x-request-id', reqId);
     const ctx: RequestContext = { reqId, startTime: Date.now() };
     // 号池在途计数:流式响应要到连接关闭才算结束,所以挂在 close 上而不是 handler 返回时。
-    reply.raw.once('close', () => ctx.poolLease?.release());
+    reply.raw.once('close', () => {
+      ctx.closed = true;
+      ctx.poolLease?.release();
+    });
     requestContextStorage.run(ctx, done);
   });
 

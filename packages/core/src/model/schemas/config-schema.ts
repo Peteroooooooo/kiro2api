@@ -202,18 +202,19 @@ export const envSchema = z.object({
   // and retention in days (0 = off).
   KIRO2CLAUDE_REQUEST_LOG_FILE: optionalString(),
   KIRO2CLAUDE_REQUEST_LOG_DAYS: intField('KIRO2CLAUDE_REQUEST_LOG_DAYS', 30, { min: 0, max: 3650 }),
-  // 号池调度(见 pool/account-pool.ts 头注释):
-  // 单账号在途请求上限,超出的请求(哪怕是粘性会话)溢出到最空闲的账号;0 = 不限。
+  // 号池调度(见 pool/account-pool.ts 头注释):限速等、不换号;只有额度 / 凭据问题才换号。
+  // 单账号在途上限:只影响新会话 / 新 subagent 的落点;0 = 不限。
   KIRO2CLAUDE_POOL_MAX_INFLIGHT: intField('KIRO2CLAUDE_POOL_MAX_INFLIGHT', 4, {
     min: 0,
     max: 1000,
   }),
-  // 全部账号都在冷却时,最近一个恢复点在这么多毫秒内就由网关等它,否则立刻回 429。0 = 不等。
-  KIRO2CLAUDE_POOL_WAIT_MS: intField('KIRO2CLAUDE_POOL_WAIT_MS', 8_000, { min: 0, max: 60_000 }),
-  // 容量类 429/5xx(INSUFFICIENT_MODEL_CAPACITY 等)是否换一个账号再试一次。
-  KIRO2CLAUDE_POOL_CAPACITY_FAILOVER: boolField(true),
-  // 账号级 429 自适应冷却的上限(秒);上游给了 Retry-After 时以它为准(仍封顶 3600)。
-  KIRO2CLAUDE_POOL_COOLDOWN_MAX_S: intField('KIRO2CLAUDE_POOL_COOLDOWN_MAX_S', 120, {
+  // 一个请求因上游限速在网关里原号等待重试的总时长上限(毫秒);0 = 不等,限速直接回给客户端。
+  KIRO2CLAUDE_POOL_THROTTLE_WAIT_MS: intField('KIRO2CLAUDE_POOL_THROTTLE_WAIT_MS', 45_000, {
+    min: 0,
+    max: 300_000,
+  }),
+  // 限速退避每步上限(秒):2 → 4 → 8 → …,±25% 抖动;上游给了 Retry-After 时以它为准(封顶 3600)。
+  KIRO2CLAUDE_POOL_BACKOFF_MAX_S: intField('KIRO2CLAUDE_POOL_BACKOFF_MAX_S', 15, {
     min: 1,
     max: 3600,
   }),
@@ -313,9 +314,8 @@ export function envToConfig(env: ParsedEnv): Config {
     requestLogFile: env.KIRO2CLAUDE_REQUEST_LOG_FILE,
     requestLogDays: env.KIRO2CLAUDE_REQUEST_LOG_DAYS,
     poolMaxInflight: env.KIRO2CLAUDE_POOL_MAX_INFLIGHT,
-    poolWaitMs: env.KIRO2CLAUDE_POOL_WAIT_MS,
-    poolCapacityFailover: env.KIRO2CLAUDE_POOL_CAPACITY_FAILOVER,
-    poolCooldownMaxS: env.KIRO2CLAUDE_POOL_COOLDOWN_MAX_S,
+    poolThrottleWaitMs: env.KIRO2CLAUDE_POOL_THROTTLE_WAIT_MS,
+    poolBackoffMaxS: env.KIRO2CLAUDE_POOL_BACKOFF_MAX_S,
     emptyStreamRetries: env.KIRO2CLAUDE_EMPTY_STREAM_RETRIES,
     captureEmptyDir: env.KIRO2CLAUDE_CAPTURE_EMPTY_DIR,
     extractThinking: env.KIRO2CLAUDE_EXTRACT_THINKING,
