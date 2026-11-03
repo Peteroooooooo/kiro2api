@@ -45,6 +45,10 @@ export interface RequestLogDraft {
   stopReason?: string;
   toolNames?: string[];
   emptyAttempts?: number;
+  /** Upstream throttles (429 / capacity) retried on the same account inside the gateway. */
+  throttleRetries?: number;
+  /** Total ms this request waited inside the gateway for throttle holds. */
+  throttleWaitMs?: number;
   usage?: RequestLogUsage;
   errorType?: string;
   errorMessage?: string;
@@ -106,6 +110,16 @@ export function noteRequestErrorDetail(detail: string): void {
 
 export function noteAccountAttempt(accountId: string): void {
   currentDraft()?.accountIds.push(accountId);
+}
+
+export function noteThrottleRetry(): void {
+  const draft = currentDraft();
+  if (draft) draft.throttleRetries = (draft.throttleRetries ?? 0) + 1;
+}
+
+export function noteThrottleWait(ms: number): void {
+  const draft = currentDraft();
+  if (draft) draft.throttleWaitMs = (draft.throttleWaitMs ?? 0) + Math.max(0, Math.round(ms));
 }
 
 export function noteFirstToken(): void {

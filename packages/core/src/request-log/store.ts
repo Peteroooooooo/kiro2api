@@ -36,6 +36,10 @@ export interface RequestLogEntry {
   stopReason?: string;
   toolNames?: string[];
   emptyAttempts: number;
+  /** Upstream throttles retried on the same account inside the gateway (0 when absent). */
+  throttleRetries?: number;
+  /** Ms waited inside the gateway for throttle holds (0 when absent). */
+  throttleWaitMs?: number;
   errorType?: string;
   errorMessage?: string;
   errorDetail?: string;
@@ -101,12 +105,20 @@ CREATE TABLE IF NOT EXISTS requests (
   error_detail TEXT,
   client_disconnected INTEGER NOT NULL DEFAULT 0,
   client_ip TEXT,
-  user_agent TEXT
+  user_agent TEXT,
+  throttle_retries INTEGER NOT NULL DEFAULT 0,
+  throttle_wait_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS requests_ts ON requests (ts);
 CREATE INDEX IF NOT EXISTS requests_account_ts ON requests (account_id, ts);
 CREATE INDEX IF NOT EXISTS requests_model_ts ON requests (model, ts);
 `;
+
+/** Columns added after the first release; `CREATE TABLE IF NOT EXISTS` does not add them to an old table. */
+const ADDED_COLUMNS: [string, string][] = [
+  ['throttle_retries', 'INTEGER NOT NULL DEFAULT 0'],
+  ['throttle_wait_ms', 'INTEGER NOT NULL DEFAULT 0'],
+];
 
 const FAILED_SQL = '(status >= 400 OR error_type IS NOT NULL)';
 
@@ -159,6 +171,8 @@ function fromRow(r: Row): RequestLogEntry {
     stopReason: str(r.stop_reason),
     toolNames: jsonList(r.tool_names),
     emptyAttempts: Number(r.empty_attempts ?? 0),
+    throttleRetries: Number(r.throttle_retries ?? 0),
+    throttleWaitMs: Number(r.throttle_wait_ms ?? 0),
     errorType: str(r.error_type),
     errorMessage: str(r.error_message),
     errorDetail: str(r.error_detail),
@@ -211,19 +225,27 @@ export class RequestLogStore {
     this.#db.pragma('journal_mode = WAL');
     this.#db.pragma('synchronous = NORMAL');
     this.#db.exec(SCHEMA);
+    const have = new Set(
+      (this.#db.prepare('PRAGMA table_info(requests)').all() as { name: string }[]).map(
+        (c) => c.name,
+      ),
+    );
+    for (const [name, type] of ADDED_COLUMNS) {
+      if (!have.has(name)) this.#db.exec(`ALTER TABLE requests ADD COLUMN ${name} ${type}`);
+    }
     this.#insert = this.#db.prepare(`
       INSERT INTO requests (
         ts, req_id, method, path, model, stream, thinking, effort, account_id, account_name,
         accounts_tried, status, duration_ms, ttft_ms, input_tokens, output_tokens,
         cache_read_tokens, cache_write_tokens, context_tokens, credits, metering_lost,
         stop_reason, tool_names, empty_attempts, error_type, error_message, error_detail,
-        client_disconnected, client_ip, user_agent
+        client_disconnected, client_ip, user_agent, throttle_retries, throttle_wait_ms
       ) VALUES (
         @ts, @reqId, @method, @path, @model, @stream, @thinking, @effort, @accountId, @accountName,
         @accountsTried, @status, @durationMs, @ttftMs, @inputTokens, @outputTokens,
         @cacheReadTokens, @cacheWriteTokens, @contextTokens, @credits, @meteringLost,
         @stopReason, @toolNames, @emptyAttempts, @errorType, @errorMessage, @errorDetail,
-        @clientDisconnected, @clientIp, @userAgent
+        @clientDisconnected, @clientIp, @userAgent, @throttleRetries, @throttleWaitMs
       )`);
   }
 
@@ -259,6 +281,8 @@ export class RequestLogStore {
       clientDisconnected: e.clientDisconnected ? 1 : 0,
       clientIp: e.clientIp ?? null,
       userAgent: e.userAgent ?? null,
+      throttleRetries: e.throttleRetries ?? 0,
+      throttleWaitMs: e.throttleWaitMs ?? 0,
     });
   }
 
@@ -390,6 +414,8 @@ export function entryFromDraft(
     stopReason: d.stopReason,
     toolNames: d.toolNames,
     emptyAttempts: d.emptyAttempts ?? 0,
+    throttleRetries: d.throttleRetries ?? 0,
+    throttleWaitMs: d.throttleWaitMs ?? 0,
     errorType: d.errorType,
     errorMessage: d.errorMessage,
     errorDetail: d.errorDetail?.slice(0, 1000),

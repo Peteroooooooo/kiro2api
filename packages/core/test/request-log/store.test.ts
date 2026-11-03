@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   entryFromDraft,
@@ -28,6 +29,8 @@ function entry(over: Partial<NewRequestLogEntry> = {}): NewRequestLogEntry {
     credits: 0.2,
     meteringLost: false,
     emptyAttempts: 0,
+    throttleRetries: 0,
+    throttleWaitMs: 0,
     clientDisconnected: false,
     accountId: 'acc1',
     accountName: '主号',
@@ -67,6 +70,8 @@ describe('RequestLogStore', () => {
         meteringLost: true,
         clientDisconnected: true,
         emptyAttempts: 2,
+        throttleRetries: 3,
+        throttleWaitMs: 7_500,
       }),
     );
     const { total, items } = store.list({}, 10, 0);
@@ -89,8 +94,39 @@ describe('RequestLogStore', () => {
         meteringLost: true,
         clientDisconnected: true,
         emptyAttempts: 2,
+        throttleRetries: 3,
+        throttleWaitMs: 7_500,
       }),
     );
+  });
+
+  it('adds the throttle columns to a request log created before they existed', () => {
+    store.close();
+    const file = path.join(dir, 'old.db');
+    const old = new Database(file);
+    old.exec(`CREATE TABLE requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, req_id TEXT NOT NULL,
+      method TEXT NOT NULL, path TEXT NOT NULL, model TEXT, stream INTEGER NOT NULL,
+      thinking TEXT, effort TEXT, account_id TEXT, account_name TEXT, accounts_tried TEXT,
+      status INTEGER NOT NULL, duration_ms INTEGER NOT NULL, ttft_ms INTEGER,
+      input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
+      cache_write_tokens INTEGER, context_tokens INTEGER, credits REAL,
+      metering_lost INTEGER NOT NULL DEFAULT 0, stop_reason TEXT, tool_names TEXT,
+      empty_attempts INTEGER NOT NULL DEFAULT 0, error_type TEXT, error_message TEXT,
+      error_detail TEXT, client_disconnected INTEGER NOT NULL DEFAULT 0, client_ip TEXT,
+      user_agent TEXT)`);
+    old.exec(
+      "INSERT INTO requests (ts, req_id, method, path, stream, status, duration_ms) VALUES (1, 'legacy', 'POST', '/x', 0, 200, 5)",
+    );
+    old.close();
+
+    store = new RequestLogStore(file);
+    store.insert(entry({ ts: 2, reqId: 'fresh', throttleRetries: 1, throttleWaitMs: 2_000 }));
+    const items = store.list({}, 10, 0).items;
+    expect(items.map((i) => [i.reqId, i.throttleRetries, i.throttleWaitMs])).toEqual([
+      ['fresh', 1, 2_000],
+      ['legacy', 0, 0],
+    ]);
   });
 
   it('filters by time, account, model, status and search text, and pages', () => {

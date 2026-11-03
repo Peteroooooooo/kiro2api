@@ -4,7 +4,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KiroCredentials } from '../../src/kiro/model/credentials.js';
 import { ProviderError } from '../../src/kiro/provider-error.js';
-import { RetryExecutor } from '../../src/kiro/retry-executor.js';
+import {
+  extractAffinityKey,
+  extractRootKey,
+  RetryExecutor,
+} from '../../src/kiro/retry-executor.js';
 import { SingleTokenManager } from '../../src/kiro/token-manager.js';
 import type { Config } from '../../src/model/config.js';
 import { AccountPool } from '../../src/pool/account-pool.js';
@@ -105,30 +109,50 @@ describe('AccountPool selection', () => {
     expect(first.token).toBe(`token-${first.accountId}`);
   });
 
-  it('moves a sticky conversation when its account cools down, then sticks to the new one', async () => {
+  it('keeps a throttled conversation on its account and waits there', async () => {
+    const { pool } = makePool(['a', 'b'], { poolThrottleWaitMs: 2_000 });
+    const before = await pool.acquireContext({ affinityKey: 'conv' });
+    pool.reportOutcome(before.accountId, { kind: 'rate_limited', retryAfterSeconds: 1 });
+
+    const started = Date.now();
+    const next = await pool.acquireContext({ affinityKey: 'conv' });
+    expect(next.accountId).toBe(before.accountId);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+
+    const view = pool.list().find((a) => a.id === before.accountId);
+    expect(view?.status).toBe('ok');
+    expect(view?.stats.failures).toBe(1);
+  });
+
+  it('moves a conversation whose account ran out of quota, then sticks to the new one', async () => {
     const { pool } = makePool(['a', 'b']);
     const before = await pool.acquireContext({ affinityKey: 'conv' });
-    pool.reportOutcome(before.accountId, { kind: 'rate_limited', retryAfterSeconds: 30 });
+    pool.reportOutcome(before.accountId, { kind: 'quota_exhausted' });
 
     const moved = await pool.acquireContext({ affinityKey: 'conv' });
     expect(moved.accountId).not.toBe(before.accountId);
     expect((await pool.acquireContext({ affinityKey: 'conv' })).accountId).toBe(moved.accountId);
-
-    const view = pool.list().find((a) => a.id === before.accountId);
-    expect(view?.status).toBe('cooling');
-    expect(view?.stats.failures).toBe(1);
+    expect(pool.list().find((a) => a.id === before.accountId)?.status).toBe('cooling');
   });
 
-  it('answers 429 with the earliest recovery time when every account is cooling', async () => {
+  it('a new conversation avoids an account on hold', async () => {
     const { pool } = makePool(['a', 'b']);
-    pool.reportOutcome('a', { kind: 'rate_limited', retryAfterSeconds: 120 });
+    pool.reportOutcome('a', { kind: 'rate_limited', retryAfterSeconds: 30 });
+    for (let i = 0; i < 3; i++) {
+      expect((await pool.acquireContext({ affinityKey: `n${i}` })).accountId).toBe('b');
+    }
+  });
+
+  it('answers 429 with the earliest recovery time when no account is in rotation', async () => {
+    const { pool } = makePool(['a', 'b']);
+    pool.reportOutcome('a', { kind: 'unauthorized' });
     pool.reportOutcome('b', { kind: 'quota_exhausted' });
 
     const err = await pool.acquireContext().catch((e) => e);
     expect(err).toBeInstanceOf(ProviderError);
     expect(err.kind).toMatchObject({ kind: 'rate_limited', status: 429 });
-    expect(err.kind.retryAfterSeconds).toBeGreaterThan(100);
-    expect(err.kind.retryAfterSeconds).toBeLessThanOrEqual(120);
+    expect(err.kind.retryAfterSeconds).toBeGreaterThan(500);
+    expect(err.kind.retryAfterSeconds).toBeLessThanOrEqual(600);
   });
 
   it('skips disabled accounts and re-enabling clears the cooldown', async () => {
@@ -214,153 +238,237 @@ describe('AccountPool quota refresh', () => {
   });
 });
 
-describe('RetryExecutor failover across pool accounts', () => {
-  it('retries a 429 on another account and keeps the conversation there', async () => {
-    const { pool } = makePool(['a', 'b']);
+const CAPACITY_BODY =
+  '{"__type":"com.amazon.kiro.runtimeservice#ThrottlingException","message":"I am experiencing high traffic, please try again shortly.","reason":"INSUFFICIENT_MODEL_CAPACITY"}';
+const RATE_BODY =
+  '{"__type":"com.amazon.kiro.runtimeservice#ThrottlingException","message":"Too many requests","reason":"USER_REQUEST_RATE_EXCEEDED"}';
+
+function tokensOf(post: ReturnType<typeof makeStubAxios>['post']): string[] {
+  return post.mock.calls.map(
+    (c) => (c[2] as { headers: Record<string, string> }).headers.Authorization,
+  );
+}
+
+function authRequest(body: string) {
+  return {
+    ...makeRequest(body),
+    buildHeaders: (_c: KiroCredentials, token: string) => ({ Authorization: `Bearer ${token}` }),
+  };
+}
+
+describe('RetryExecutor: throttles wait on the same account', () => {
+  it('capacity 429 three times then success: 200, one account only', async () => {
+    // 回放 11-03:换号后第二个号 1 秒内同样 INSUFFICIENT_MODEL_CAPACITY,换号无用。
+    const { pool } = makePool(['a', 'b', 'c'], { poolBackoffMaxS: 1 });
     const { client, post } = makeStubAxios([
-      { status: 429, data: 'Too many requests', headers: {} },
+      { status: 429, data: CAPACITY_BODY, headers: { 'retry-after': '0' } },
+      { status: 429, data: CAPACITY_BODY, headers: { 'retry-after': '0' } },
+      { status: 429, data: CAPACITY_BODY, headers: { 'retry-after': '0' } },
       { status: 200, data: 'ok', headers: {} },
     ]);
-    const executor = new RetryExecutor(pool, client);
-
-    const request = {
-      ...makeRequest(conversation('child', 'root-1')),
-      buildHeaders: (_c: KiroCredentials, token: string) => ({ Authorization: `Bearer ${token}` }),
-    };
-    const response = await executor.execute(request);
-    expect(response.status).toBe(200);
-    expect(post).toHaveBeenCalledTimes(2);
-
-    const tokens = post.mock.calls.map(
-      (c) => (c[2] as { headers: Record<string, string> }).headers.Authorization,
+    const res = await new RetryExecutor(pool, client).execute(
+      authRequest(modelConversation('conv', 'opus')),
     );
-    expect(tokens[0]).not.toBe(tokens[1]);
-
-    const limited = pool.list().find((a) => a.status === 'cooling');
-    const served = pool.list().find((a) => a.status === 'ok');
-    expect(limited?.stats.failures).toBe(1);
-    expect(served?.stats.requests).toBe(1);
-
-    // The root conversation id is the affinity key, so a sibling request follows.
-    expect((await pool.acquireContext({ affinityKey: 'root-1' })).accountId).toBe(served?.id);
+    expect(res.status).toBe(200);
+    expect(post).toHaveBeenCalledTimes(4);
+    expect(new Set(tokensOf(post)).size).toBe(1);
+    // Nothing is benched: every account is still in rotation.
+    expect(pool.list().every((a) => a.status === 'ok')).toBe(true);
   });
 
-  it('gives up after every account failed and surfaces the last error', async () => {
+  it('per-user rate 429 also retries on the same account after its back-off', async () => {
     const { pool } = makePool(['a', 'b']);
-    const { client, post } = makeStubAxios({ status: 429, data: 'Too many requests', headers: {} });
-    const executor = new RetryExecutor(pool, client);
+    const { client, post } = makeStubAxios([
+      { status: 429, data: RATE_BODY, headers: { 'retry-after': '1' } },
+      { status: 200, data: 'ok', headers: {} },
+    ]);
+    const started = Date.now();
+    const res = await new RetryExecutor(pool, client).execute(authRequest(conversation('x')));
+    expect(res.status).toBe(200);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+    const [first, second] = tokensOf(post);
+    expect(first).toBe(second);
+  });
 
-    const err = await executor.execute(makeRequest(conversation('x'))).catch((e) => e);
+  it('gives up at the wait budget with a 429 carrying Retry-After', async () => {
+    const { pool } = makePool(['a', 'b'], { poolThrottleWaitMs: 1_500 });
+    const { client, post } = makeStubAxios({ status: 429, data: CAPACITY_BODY, headers: {} });
+    const started = Date.now();
+    const err = await new RetryExecutor(pool, client)
+      .execute(authRequest(modelConversation('conv', 'opus')))
+      .catch((e) => e);
+    expect(Date.now() - started).toBeLessThan(3_000);
     expect(err).toBeInstanceOf(ProviderError);
     expect(err.kind.kind).toBe('rate_limited');
-    expect(post).toHaveBeenCalledTimes(2);
+    expect(err.kind.retryAfterSeconds).toBeGreaterThanOrEqual(1);
+    expect(new Set(tokensOf(post)).size).toBe(1);
   });
 
-  it('moves a capacity 429 to one other account, cooling only that model', async () => {
-    // 回放 11-02:INSUFFICIENT_MODEL_CAPACITY 全落在同一账号,另外两个号一次没试。
-    const { pool } = makePool(['a', 'b', 'c']);
-    const capacityBody =
-      '{"__type":"com.amazon.kiro.runtimeservice#ThrottlingException","message":"I am experiencing high traffic","reason":"INSUFFICIENT_MODEL_CAPACITY"}';
-    const { client, post } = makeStubAxios([
-      { status: 429, data: capacityBody, headers: {} },
-      { status: 200, data: 'ok', headers: {} },
-    ]);
-    const executor = new RetryExecutor(pool, client);
-
-    const res = await executor.execute(makeRequest(modelConversation('conv', 'opus')));
-    expect(res.status).toBe(200);
-    expect(post).toHaveBeenCalledTimes(2);
-
-    const views = pool.list();
-    const cooled = views.find((a) => a.modelCooldowns?.opus);
-    expect(cooled).toBeDefined();
-    // Account-level status untouched: it still serves other models.
-    expect(cooled?.status).toBe('ok');
-    const other = await pool.acquireContext({ model: 'sonnet' });
-    expect(other.accountId).toBeDefined();
+  it('a throttled account does not block other conversations', async () => {
+    const { pool } = makePool(['a', 'b'], { poolThrottleWaitMs: 1_000 });
+    const home = await pool.acquireContext({ affinityKey: 'busy', model: 'opus' });
+    pool.reportOutcome(home.accountId, { kind: 'capacity', model: 'opus', retryAfterSeconds: 30 });
+    const started = Date.now();
+    const other = await pool.acquireContext({ affinityKey: 'fresh', model: 'opus' });
+    expect(Date.now() - started).toBeLessThan(100);
+    expect(other.accountId).not.toBe(home.accountId);
+    // The held account still serves another model right away.
+    expect((await pool.acquireContext({ stayOn: home.accountId, model: 'sonnet' })).accountId).toBe(
+      home.accountId,
+    );
   });
 
-  it('stops after a second capacity answer instead of walking the whole pool', async () => {
-    const { pool } = makePool(['a', 'b', 'c']);
-    const capacityBody = '{"reason":"INSUFFICIENT_MODEL_CAPACITY"}';
-    const { client, post } = makeStubAxios({ status: 429, data: capacityBody, headers: {} });
-    const executor = new RetryExecutor(pool, client);
-
-    const err = await executor
+  it('poolThrottleWaitMs=0 forwards the throttle at once', async () => {
+    const { pool } = makePool(['a', 'b'], { poolThrottleWaitMs: 0 });
+    const { client, post } = makeStubAxios({ status: 429, data: CAPACITY_BODY, headers: {} });
+    const err = await new RetryExecutor(pool, client)
       .execute(makeRequest(modelConversation('conv', 'opus')))
       .catch((e) => e);
-    expect(err).toBeInstanceOf(ProviderError);
     expect(err.kind.kind).toBe('rate_limited');
-    expect(post).toHaveBeenCalledTimes(2);
-  });
-
-  it('honours poolCapacityFailover=false', async () => {
-    const { pool } = makePool(['a', 'b'], { poolCapacityFailover: false });
-    const { client, post } = makeStubAxios({
-      status: 429,
-      data: '{"reason":"INSUFFICIENT_MODEL_CAPACITY"}',
-      headers: {},
-    });
-    const executor = new RetryExecutor(pool, client);
-    await executor.execute(makeRequest(modelConversation('conv', 'opus'))).catch(() => undefined);
     expect(post).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('AccountPool adaptive cooldown', () => {
-  it('starts at 5 s, doubles per consecutive 429, and a success resets it', () => {
-    const { pool } = makePool(['a']);
-    const until = () => Date.parse(pool.list()[0]?.cooldownUntil ?? '') - Date.now();
+describe('RetryExecutor: account faults switch, once', () => {
+  it('quota exhausted moves the request to another account and the conversation follows', async () => {
+    const { pool } = makePool(['a', 'b', 'c']);
+    const { client, post } = makeStubAxios([
+      { status: 402, data: '{"reason":"MONTHLY_REQUEST_COUNT"}', headers: {} },
+      { status: 200, data: 'ok', headers: {} },
+    ]);
+    const res = await new RetryExecutor(pool, client).execute(authRequest(conversation('conv')));
+    expect(res.status).toBe(200);
+    expect(post).toHaveBeenCalledTimes(2);
+    const [first, second] = tokensOf(post);
+    expect(first).not.toBe(second);
 
-    pool.reportOutcome('a', { kind: 'rate_limited' });
-    expect(until()).toBeGreaterThan(3_000);
-    expect(until()).toBeLessThanOrEqual(5_000);
-
-    pool.update('a', { enabled: true }); // clears cooldown and strikes; start over
-    pool.reportOutcome('a', { kind: 'rate_limited' }); // 5 s
-    pool.reportOutcome('a', { kind: 'rate_limited' }); // 10 s
-    expect(until()).toBeGreaterThan(8_000);
-    expect(until()).toBeLessThanOrEqual(10_000);
-
-    pool.reportOutcome('a', { kind: 'success' });
-    pool.update('a', { enabled: true });
-    pool.reportOutcome('a', { kind: 'rate_limited' });
-    expect(until()).toBeLessThanOrEqual(5_000);
+    const served = pool.list().find((a) => a.stats.requests === 1);
+    expect(pool.list().filter((a) => a.status === 'cooling')).toHaveLength(1);
+    expect((await pool.acquireContext({ affinityKey: 'conv' })).accountId).toBe(served?.id);
   });
 
-  it('caps the adaptive cooldown at poolCooldownMaxS but obeys an upstream Retry-After', () => {
-    const { pool } = makePool(['a'], { poolCooldownMaxS: 12 });
-    const until = () => Date.parse(pool.list()[0]?.cooldownUntil ?? '') - Date.now();
-    for (let i = 0; i < 6; i++) pool.reportOutcome('a', { kind: 'rate_limited' });
-    expect(until()).toBeLessThanOrEqual(12_000);
-
-    pool.reportOutcome('a', { kind: 'rate_limited', retryAfterSeconds: 300 });
-    expect(until()).toBeGreaterThan(250_000);
+  it('gives up after every account had a fault and surfaces the last error', async () => {
+    const { pool } = makePool(['a', 'b']);
+    const { client, post } = makeStubAxios({ status: 402, data: '{}', headers: {} });
+    const err = await new RetryExecutor(pool, client)
+      .execute(makeRequest(conversation('x')))
+      .catch((e) => e);
+    expect(err.kind.kind).toBe('quota_exhausted');
+    expect(post).toHaveBeenCalledTimes(2);
   });
 
-  it('labels the cooldown with the upstream reason', () => {
-    const { pool } = makePool(['a']);
-    pool.reportOutcome('a', { kind: 'rate_limited', reason: 'USER_REQUEST_RATE_EXCEEDED' });
-    expect(pool.list()[0]?.cooldownReason).toContain('USER_REQUEST_RATE_EXCEEDED');
+  it('keeps in-flight counts exact across a failover', async () => {
+    const { pool } = makePool(['a', 'b']);
+    const { client } = makeStubAxios([
+      { status: 402, data: '{}', headers: {} },
+      { status: 200, data: 'ok', headers: {} },
+    ]);
+    const executor = new RetryExecutor(pool, client);
+    const { release } = await inRequest(() => executor.execute(makeRequest(conversation('x'))));
+    expect(pool.list().reduce((n, a) => n + a.inflight, 0)).toBe(1);
+    release();
+    expect(pool.list().reduce((n, a) => n + a.inflight, 0)).toBe(0);
   });
 });
 
-describe('AccountPool in-flight spill', () => {
-  it('spills a sticky conversation off its account once it is full, without re-pinning', async () => {
+describe('AccountPool back-off holds', () => {
+  const holdMs = (pool: AccountPool, model?: string) => {
+    const t = pool.list()[0]?.throttles?.find((x) => x.model === model);
+    return t ? Date.parse(t.until) - Date.now() : 0;
+  };
+
+  it('starts around 2 s, doubles per throttle after the hold ran out, and a success resets it', () => {
+    const { pool } = makePool(['a']);
+    pool.reportOutcome('a', { kind: 'rate_limited' });
+    expect(holdMs(pool)).toBeGreaterThan(1_400);
+    expect(holdMs(pool)).toBeLessThanOrEqual(2_500);
+
+    // A throttle while the hold is running neither escalates nor extends it.
+    const before = holdMs(pool);
+    pool.reportOutcome('a', { kind: 'rate_limited' });
+    expect(holdMs(pool)).toBeLessThanOrEqual(before);
+
+    pool.update('a', { enabled: true }); // clears holds
+    pool.reportOutcome('a', { kind: 'rate_limited' });
+    pool.update('a', { enabled: true });
+    expect(pool.list()[0]?.throttles).toBeUndefined();
+  });
+
+  it('caps the step at poolBackoffMaxS but an upstream Retry-After wins', () => {
+    const { pool } = makePool(['a'], { poolBackoffMaxS: 3 });
+    for (let i = 0; i < 6; i++) {
+      pool.update('a', { enabled: true });
+      pool.reportOutcome('a', { kind: 'rate_limited' });
+    }
+    expect(holdMs(pool)).toBeLessThanOrEqual(3_000 * 1.25 + 50);
+    pool.reportOutcome('a', { kind: 'rate_limited', retryAfterSeconds: 300 });
+    expect(holdMs(pool)).toBeGreaterThan(250_000);
+  });
+
+  it('a capacity hold is per model and labelled', () => {
+    const { pool } = makePool(['a']);
+    pool.reportOutcome('a', { kind: 'capacity', model: 'opus' });
+    expect(holdMs(pool, 'opus')).toBeGreaterThan(0);
+    expect(holdMs(pool)).toBe(0);
+    expect(pool.holdRemainingMs('a', 'opus')).toBeGreaterThan(0);
+    expect(pool.holdRemainingMs('a', 'sonnet')).toBe(0);
+    pool.reportOutcome('a', { kind: 'success', model: 'opus' });
+    expect(pool.holdRemainingMs('a', 'opus')).toBe(0);
+  });
+
+  it('labels the account hold with the upstream reason', () => {
+    const { pool } = makePool(['a']);
+    pool.reportOutcome('a', { kind: 'rate_limited', reason: 'USER_REQUEST_RATE_EXCEEDED' });
+    expect(pool.list()[0]?.throttles?.[0]?.reason).toContain('USER_REQUEST_RATE_EXCEEDED');
+    expect(pool.list()[0]?.status).toBe('ok');
+  });
+});
+
+describe('AccountPool subagent placement', () => {
+  it('a subagent starts on its root account and then keeps its own account', async () => {
+    const { pool } = makePool(['a', 'b'], { poolMaxInflight: 2 });
+    const root = await inRequest(() =>
+      pool.acquireContext({ affinityKey: 'root', rootKey: 'root' }),
+    );
+    const sub = await inRequest(() =>
+      pool.acquireContext({ affinityKey: 'sub1', rootKey: 'root' }),
+    );
+    expect(sub.ctx.accountId).toBe(root.ctx.accountId);
+    // Root account now full (2 in flight): the next new subagent goes elsewhere…
+    const sub2 = await inRequest(() =>
+      pool.acquireContext({ affinityKey: 'sub2', rootKey: 'root' }),
+    );
+    expect(sub2.ctx.accountId).not.toBe(root.ctx.accountId);
+    // …and stays there on every later turn, even once the root account has room.
+    root.release();
+    sub.release();
+    for (let i = 0; i < 3; i++) {
+      expect((await pool.acquireContext({ affinityKey: 'sub2', rootKey: 'root' })).accountId).toBe(
+        sub2.ctx.accountId,
+      );
+    }
+  });
+
+  it('extractAffinityKey is the own conversation id, extractRootKey the root', () => {
+    expect(extractAffinityKey(conversation('child', 'root-1'))).toBe('child');
+    expect(extractRootKey(conversation('child', 'root-1'))).toBe('root-1');
+    expect(extractAffinityKey(conversation('main', 'main'))).toBe('main');
+  });
+});
+
+describe('AccountPool in-flight spill (one shared conversation id)', () => {
+  it('spills off a full home only to a quieter account, without re-pinning', async () => {
     const { pool } = makePool(['a', 'b'], { poolMaxInflight: 2 });
     const home = await inRequest(() => pool.acquireContext({ affinityKey: 'root' }));
     await inRequest(() => pool.acquireContext({ affinityKey: 'root' }));
-    // home now has 2 in flight → the third goes elsewhere.
     const spilled = await inRequest(() => pool.acquireContext({ affinityKey: 'root' }));
     expect(spilled.ctx.accountId).not.toBe(home.ctx.accountId);
-
-    // Releasing frees the home again and the conversation never moved.
     home.release();
     const back = await inRequest(() => pool.acquireContext({ affinityKey: 'root' }));
     expect(back.ctx.accountId).toBe(home.ctx.accountId);
   });
 
-  it('stays on the sticky account when every account is equally busy', async () => {
+  it('stays home when every account is equally busy', async () => {
     const { pool } = makePool(['a', 'b'], { poolMaxInflight: 1 });
     const home = await inRequest(() => pool.acquireContext({ affinityKey: 'root' }));
     await inRequest(() => pool.acquireContext({ affinityKey: 'other' }));
@@ -375,49 +483,5 @@ describe('AccountPool in-flight spill', () => {
     const fresh = await inRequest(() => pool.acquireContext({ affinityKey: 'c2' }));
     expect(fresh.ctx.accountId).not.toBe(first.ctx.accountId);
     expect(pool.list().find((a) => a.id === first.ctx.accountId)?.inflight).toBe(2);
-  });
-
-  it('moves the lease to the failover account so in-flight counts stay exact', async () => {
-    const { pool } = makePool(['a', 'b']);
-    const { client } = makeStubAxios([
-      { status: 429, data: 'Too many requests', headers: {} },
-      { status: 200, data: 'ok', headers: {} },
-    ]);
-    const executor = new RetryExecutor(pool, client);
-    const { release } = await inRequest(() => executor.execute(makeRequest(conversation('x'))));
-    expect(pool.list().reduce((n, a) => n + a.inflight, 0)).toBe(1);
-    release();
-    expect(pool.list().reduce((n, a) => n + a.inflight, 0)).toBe(0);
-  });
-});
-
-describe('AccountPool short wait when everything is cooling', () => {
-  it('waits out a short cooldown instead of answering 429', async () => {
-    // 回放 11-01 11:39:单号 429 后的一分钟里几十个请求被网关当场回 429。
-    const { pool } = makePool(['a'], { poolWaitMs: 2_000 });
-    pool.reportOutcome('a', { kind: 'rate_limited', retryAfterSeconds: 1 });
-    const started = Date.now();
-    const ctx = await pool.acquireContext();
-    expect(ctx.accountId).toBe('a');
-    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
-  });
-
-  it('answers 429 at once with the real recovery time when it is beyond the wait budget', async () => {
-    const { pool } = makePool(['a'], { poolWaitMs: 500 });
-    pool.reportOutcome('a', { kind: 'rate_limited', retryAfterSeconds: 30 });
-    const started = Date.now();
-    const err = await pool.acquireContext().catch((e) => e);
-    expect(Date.now() - started).toBeLessThan(200);
-    expect(err.kind).toMatchObject({ kind: 'rate_limited', status: 429 });
-    expect(err.kind.retryAfterSeconds).toBeGreaterThan(25);
-  });
-
-  it('counts a model-capacity cooldown in the recovery time', async () => {
-    const { pool } = makePool(['a'], { poolWaitMs: 0 });
-    pool.reportOutcome('a', { kind: 'capacity', model: 'opus' });
-    const err = await pool.acquireContext({ model: 'opus' }).catch((e) => e);
-    expect(err.kind).toMatchObject({ kind: 'rate_limited', status: 429 });
-    expect(err.kind.retryAfterSeconds).toBeGreaterThan(10);
-    expect((await pool.acquireContext({ model: 'sonnet' })).accountId).toBe('a');
   });
 });

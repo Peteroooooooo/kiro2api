@@ -23,16 +23,17 @@ export interface Config {
   /** Days of request log to keep (default 30). 0 turns the request log off. Pool mode with an admin key only. */
   requestLogDays: number;
   /**
-   * 号池:单账号在途请求上限(默认 4,0 = 不限)。粘性会话的账号满了也会溢出到
-   * 最空闲的账号——代价是那一次请求没有上游前缀缓存。缺省视为 4。
+   * 号池:单账号在途请求上限(默认 4,0 = 不限)。只影响**新会话 / 新 subagent** 放在哪个号,
+   * 以及客户端没区分 subagent 时同一会话的并发请求溢出;已有会话不因此换号。
    */
   poolMaxInflight?: number;
-  /** 号池:全部账号冷却时,网关愿意等最近恢复点的上限(毫秒,默认 8000,0 = 不等)。 */
-  poolWaitMs?: number;
-  /** 号池:容量类 429/5xx 是否换一个账号再试一次(默认 true)。 */
-  poolCapacityFailover?: boolean;
-  /** 号池:账号级 429 自适应冷却上限(秒,默认 120)。 */
-  poolCooldownMaxS?: number;
+  /**
+   * 号池:一个请求因上游限速(429 / 容量不足)在网关里**原号等待重试**的总时长上限(毫秒,
+   * 默认 45000,0 = 不等,限速直接回给客户端)。超出后回 429 + Retry-After。
+   */
+  poolThrottleWaitMs?: number;
+  /** 号池:限速退避每步的上限(秒,默认 15);步长 2 s → 4 s → 8 s …,上游给了 Retry-After 时以它为准。 */
+  poolBackoffMaxS?: number;
   /**
    * 上游偶发返回「200 OK + 零内容帧」的空流(silent failure)。pre-commit 阶段
    * 检测到后,网关对同一请求最多重发这么多次来透明吸收瞬时空流。默认 2;

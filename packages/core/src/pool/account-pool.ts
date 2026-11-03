@@ -6,51 +6,53 @@
  * to the JSON `AccountStore`. An optional kiro-cli SQLite credential joins the
  * pool as one more account and keeps writing back to SQLite.
  *
+ * ## Rule: throttles wait, only account faults switch
+ *
+ * A 429 (per-user rate, `INSUFFICIENT_MODEL_CAPACITY`) or a 5xx capacity answer
+ * is a throttle, not a broken account. Switching accounts on it buys nothing —
+ * on 11-02/11-03 the second account refused the same model within a second —
+ * and costs the conversation its per-account prompt cache. So a throttle puts a
+ * short back-off **hold** on the account (or on that model on the account) and
+ * the request waits it out and retries on the **same** account. Only quota
+ * exhausted, a rejected credential or a failed refresh moves a conversation.
+ *
  * ## Selection
  *
- * 1. Soft stickiness: a conversation (`affinityKey`, the Kiro root conversation
- *    id) stays on the account that served it first. The upstream prefix cache is
- *    per account, so moving a long session costs a full uncached prompt.
- * 2. …unless that account already has `poolMaxInflight` requests in flight
- *    (default 4). Then this one request spills to the least-loaded account while
- *    the conversation keeps its home: a main agent plus parallel subagents share
- *    one root id, and piling all of them onto one account is what trips the
- *    per-user `USER_REQUEST_RATE_EXCEEDED` limit.
- * 3. A new conversation goes to the usable account with the fewest requests in
- *    flight, ties broken by least recently picked (round-robin).
- * 4. An account that is disabled, cooling down, cooling for the requested model,
- *    or excluded by the executor (it already failed this request) is skipped; a
- *    sticky conversation whose account became unusable moves and sticks to the
- *    new account.
- * 5. An account whose plan does not offer the requested model (its
- *    ListAvailableModels list, refreshed at startup, on "查额度" and every few
- *    hours) is skipped too. If no enabled account offers it, the request fails
- *    with `model_unavailable` without reaching the upstream.
+ * 1. Stickiness: a conversation (`affinityKey` = Kiro `conversationId`) stays on
+ *    the account that served it first, also while that account is on hold.
+ *    Subagents have their own conversationId, so each subagent sticks to one
+ *    account of its own instead of hopping per turn.
+ * 2. A subagent seen for the first time starts on its root conversation's account
+ *    (`rootKey`) when that has fewer than `poolMaxInflight` (default 4) requests
+ *    in flight and is not on hold; otherwise it is placed like a new conversation.
+ * 3. A new conversation goes to an account with no hold, fewest requests in
+ *    flight, ties broken by least recently picked. If every account is on hold it
+ *    takes the one that frees up first and waits.
+ * 4. Disabled / hard-cooling accounts (quota, credential), accounts the executor
+ *    excluded, and accounts whose plan lacks the model (ListAvailableModels) are
+ *    skipped. If no enabled account offers the model: `model_unavailable`, nothing
+ *    is sent upstream.
  *
  * In-flight counting needs a request context: the lease lives on it and is
  * released when the HTTP response closes (index.ts), so a stream counts until
  * its last byte. Calls outside a request (startup, tests) are not counted.
  *
- * ## Cooldowns
+ * ## Holds (throttles)
  *
- * Account-scoped failures reported by the executor cool the account down:
+ * Upstream `Retry-After` when given, else 2 s → 4 s → 8 s → capped at
+ * `poolBackoffMaxS` (default 15), each with ±25 % jitter so waiting requests do
+ * not wake together and hit the upstream in a burst. Every request for that
+ * account/model waits for the same hold. A success resets the step.
  *
- * - 429 (per-user / credit rate): upstream `Retry-After` when given, else an
- *   adaptive 5 s → 10 s → 20 s … capped at `poolCooldownMaxS` (default 120),
- *   reset by the next success. A flat 60 s used to bench an account that was
- *   fine again seconds later and turn one 429 into a minute of gateway 429s.
- * - Model capacity (429 `INSUFFICIENT_MODEL_CAPACITY`, 5xx
- *   `MODEL_TEMPORARILY_UNAVAILABLE`): only that model on that account, 15 s.
- * - Quota exhausted 6 h or until a quota refresh shows headroom; unauthorized
- *   10 min. A refresh token the OIDC service rejects as invalid disables the
- *   account until it logs in again.
+ * A request waits at most `poolThrottleWaitMs` (default 45 s) in total, before
+ * any byte goes downstream; past that it answers 429 with a Retry-After of the
+ * remaining hold.
  *
- * ## When nothing is usable
+ * ## Hard cooldowns (account faults)
  *
- * If the earliest recovery is within `poolWaitMs` (default 8 s) the gateway
- * waits for it — nothing has been sent downstream yet, so the client never sees
- * it. Otherwise it answers 429 with a Retry-After equal to that recovery time,
- * instead of a 429 the client retries straight into again.
+ * Quota exhausted 6 h or until a quota refresh shows headroom; unauthorized
+ * 10 min; token refresh failure 5 min. A refresh token the OIDC service rejects
+ * as invalid disables the account until it logs in again.
  */
 
 import type { LoadedCredentials } from '../kiro/credentials-loader.js';
@@ -72,7 +74,7 @@ import type {
 import type { Config } from '../model/config.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext, type RequestContext } from '../shared/request-context.js';
-import { noteAccountAttempt } from '../shared/request-log.js';
+import { noteAccountAttempt, noteThrottleWait } from '../shared/request-log.js';
 import {
   type AccountSource,
   type AccountStore,
@@ -85,33 +87,54 @@ const KIRO_CLI_ACCOUNT_ID = 'kiro-cli';
 const AFFINITY_TTL_MS = 6 * 3_600_000;
 const AFFINITY_MAX = 10_000;
 const COOLDOWN = {
-  /** First adaptive step for a 429 without Retry-After; doubles per consecutive 429. */
-  rateLimitedBaseS: 5,
-  rateLimitedDefaultMaxS: 120,
-  /** Hard cap, also for an upstream Retry-After. */
-  rateLimitedMaxS: 3_600,
-  capacityMs: 15_000,
   quotaMs: 6 * 3_600_000,
   unauthorizedMs: 10 * 60_000,
   refreshFailedMs: 5 * 60_000,
 };
+const BACKOFF = {
+  /** First back-off step after a throttle without Retry-After; doubles per consecutive throttle. */
+  baseMs: 2_000,
+  defaultMaxS: 15,
+  /** Hard cap, also for an upstream Retry-After. */
+  retryAfterMaxMs: 3_600_000,
+  /** ± fraction of random jitter on each step. */
+  jitter: 0.25,
+};
 const DEFAULT_MAX_INFLIGHT = 4;
-const DEFAULT_WAIT_MS = 8_000;
-/** Slack added to a wait so the cooldown has really expired when we wake. */
+const DEFAULT_THROTTLE_WAIT_MS = 45_000;
+/** Slack added to a wait so the hold has really expired when we wake. */
 const WAIT_SLACK_MS = 20;
+/** Random extra per waiter, so requests waiting on one hold do not retry together. */
+const WAITER_SPREAD_MS = 400;
+
+/** A back-off hold after a throttle: requests wait for it, the account stays in rotation. */
+interface Hold {
+  until: number;
+  /** Consecutive throttles; drives the back-off step, reset by a success. */
+  strikes: number;
+  reason?: string;
+}
 
 interface Slot {
   account: StoredAccount;
   manager: SingleTokenManager;
+  /** Hard cooldown (quota / credential): the account is out of rotation until then. */
   cooldownUntil: number;
   cooldownReason?: string;
   lastPickedAt: number;
   /** Requests currently holding a lease on this account. */
   inflight: number;
-  /** Consecutive account-scoped 429s; drives the adaptive cooldown, reset by a success. */
-  strikes: number;
-  /** Per-model capacity cooldowns: upstream model id → until (epoch ms). */
-  modelCooldowns: Map<string, number>;
+  /** Account-wide hold after a per-user / credit-rate 429. */
+  hold: Hold;
+  /** Per-model holds after a capacity answer: upstream model id → hold. */
+  modelHolds: Map<string, Hold>;
+}
+
+export interface ThrottleView {
+  /** Upstream model id; absent = the whole account. */
+  model?: string;
+  until: string;
+  reason?: string;
 }
 
 export interface AccountView {
@@ -129,8 +152,8 @@ export interface AccountView {
   status: 'ok' | 'cooling' | 'disabled';
   cooldownUntil?: string;
   cooldownReason?: string;
-  /** Models cooling on this account after a capacity error: model id → until (ISO). */
-  modelCooldowns?: Record<string, string>;
+  /** Back-off holds after throttles (account-wide and per model); the account stays in rotation. */
+  throttles?: ThrottleView[];
   /** Requests in flight on this account right now. */
   inflight: number;
   tokenExpiresAt?: string;
@@ -167,17 +190,47 @@ function offers(slot: Slot, model: string | undefined): boolean {
   return !model || !models || models.includes(model);
 }
 
-/** Until when `model` cools on this account after a capacity error (0 = not cooling). */
-function modelCooldownUntil(slot: Slot, model: string | undefined): number {
-  return model ? (slot.modelCooldowns.get(model) ?? 0) : 0;
+/** Until when requests for `model` on this account must wait (0 = no hold). */
+function holdUntil(slot: Slot, model: string | undefined): number {
+  const modelHold = model ? (slot.modelHolds.get(model)?.until ?? 0) : 0;
+  return Math.max(slot.hold.until, modelHold);
 }
 
-function modelCooling(slot: Slot, model: string | undefined, now: number): boolean {
-  return modelCooldownUntil(slot, model) > now;
+/** Hard cooldown over, enabled, offers the model, not excluded. Holds do not count here. */
+function inRotation(slot: Slot, model: string | undefined, skip: ReadonlySet<string>, now: number) {
+  return (
+    slot.account.enabled &&
+    slot.cooldownUntil <= now &&
+    !skip.has(slot.account.id) &&
+    offers(slot, model)
+  );
+}
+
+function newHold(): Hold {
+  return { until: 0, strikes: 0 };
+}
+
+/** Next back-off step: Retry-After if the upstream gave one, else 2 s · 2^strikes (capped), jittered. */
+function backoffMs(strikes: number, capS: number, retryAfterSeconds?: number): number {
+  if (retryAfterSeconds !== undefined) {
+    return Math.min(retryAfterSeconds * 1000, BACKOFF.retryAfterMaxMs);
+  }
+  const base = Math.min(BACKOFF.baseMs * 2 ** strikes, capS * 1000);
+  const jitter = 1 + (Math.random() * 2 - 1) * BACKOFF.jitter;
+  return Math.round(base * jitter);
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+interface Picked {
+  slot: Slot;
+  /**
+   * sticky = the conversation's own account; new = first placement; moved = its
+   * account left rotation (re-pinned); spilled = home is full, this request only.
+   */
+  how: 'sticky' | 'new' | 'moved' | 'spilled';
 }
 
 export class AccountPool implements TokenSource {
@@ -218,46 +271,69 @@ export class AccountPool implements TokenSource {
     return Math.max(n, 1);
   }
 
+  throttleBudgetMs(): number {
+    return this.#config.poolThrottleWaitMs ?? DEFAULT_THROTTLE_WAIT_MS;
+  }
+
+  holdRemainingMs(accountId: string, model?: string): number {
+    const slot = this.#slots.get(accountId);
+    return slot ? Math.max(0, holdUntil(slot, model) - Date.now()) : 0;
+  }
+
   async acquireContext(opts: AcquireOptions = {}): Promise<CallContext> {
     const skip = new Set(opts.exclude ?? []);
-    const waitBudget = this.#config.poolWaitMs ?? DEFAULT_WAIT_MS;
-    const waitDeadline = Date.now() + waitBudget;
+    const deadline = opts.deadline ?? Date.now() + this.throttleBudgetMs();
     let waited = 0;
     let lastError: unknown;
     while (true) {
-      const picked = this.#pick(opts.affinityKey, skip, opts.model);
+      const picked = this.#pick(opts, skip);
       if (!picked) {
         if (lastError) throw lastError;
-        // Everything is cooling: if the earliest recovery is close, wait for it
-        // here (nothing has gone downstream yet) instead of answering a 429 the
-        // client would retry straight into.
-        const recovery = this.#soonestRecovery(skip, opts.model);
-        const now = Date.now();
-        if (recovery !== undefined && recovery + WAIT_SLACK_MS <= waitDeadline) {
-          const ms = Math.max(recovery - now, 0) + WAIT_SLACK_MS;
-          waited += ms;
-          await sleep(ms);
-          continue;
-        }
-        if (waited > 0) {
-          getLogger().info({ msg: 'pool wait gave up', waited_ms: waited, model: opts.model });
-        }
         throw this.#noAccountError(skip, opts.model);
       }
-      const { slot, spilled } = picked;
+      const { slot, how } = picked;
+      // On hold (throttled): wait here, on this account, before anything goes
+      // downstream — unless the wait would run past the request's budget.
+      const wait = holdUntil(slot, opts.model) - Date.now();
+      if (wait > 0) {
+        if (getRequestContext()?.closed || Date.now() + wait + WAIT_SLACK_MS > deadline) {
+          getLogger().info({
+            msg: 'pool throttle wait budget used up',
+            account: slot.account.id,
+            model: opts.model,
+            waited_ms: waited,
+            hold_ms: wait,
+          });
+          throw this.#throttledError(wait);
+        }
+        // Several requests can wait on one hold; a small per-waiter spread keeps
+        // them from all hitting the upstream in the same millisecond.
+        const ms = wait + WAIT_SLACK_MS + Math.floor(Math.random() * WAITER_SPREAD_MS);
+        waited += ms;
+        noteThrottleWait(ms);
+        await sleep(ms);
+        continue; // re-pick: an admin action may have changed the account meanwhile
+      }
       try {
         const ctx = await slot.manager.acquireContext();
         slot.lastPickedAt = Date.now();
-        if (opts.affinityKey && !spilled) this.#setAffinity(opts.affinityKey, slot.account.id);
+        if (opts.affinityKey && how !== 'spilled')
+          this.#setAffinity(opts.affinityKey, slot.account.id);
         const reqCtx = getRequestContext();
         if (reqCtx) {
           reqCtx.accountId = slot.account.id;
           this.#lease(reqCtx, slot);
         }
         noteAccountAttempt(slot.account.id);
-        if (waited > 0 || spilled) {
+        if (waited > 0 || how === 'moved' || how === 'spilled') {
+          const msg = {
+            moved: 'pool conversation moved to another account',
+            spilled: 'pool request spilled off its busy sticky account',
+            sticky: 'pool wait succeeded',
+            new: 'pool wait succeeded',
+          }[how];
           getLogger().info({
-            msg: spilled ? 'pool request spilled off its sticky account' : 'pool wait succeeded',
+            msg,
             account: slot.account.id,
             waited_ms: waited > 0 ? waited : undefined,
             inflight: slot.inflight,
@@ -280,7 +356,7 @@ export class AccountPool implements TokenSource {
 
   /** `/kiro/usage`: the usage of the first usable account. */
   async getUsageLimits(): Promise<UsageLimitsResponse> {
-    const slot = this.#pick(undefined, new Set())?.slot;
+    const slot = this.#pick({}, new Set())?.slot;
     if (!slot) throw this.#noAccountError(new Set());
     return slot.manager.getUsageLimits();
   }
@@ -293,7 +369,8 @@ export class AccountPool implements TokenSource {
     if (outcome.kind === 'success') {
       stats.requests++;
       stats.lastUsedAt = new Date(now).toISOString();
-      slot.strikes = 0;
+      slot.hold.strikes = 0;
+      if (outcome.model) slot.modelHolds.delete(outcome.model);
       if (slot.cooldownUntil <= now) slot.cooldownReason = undefined;
       this.#store.scheduleSave();
       return;
@@ -302,38 +379,31 @@ export class AccountPool implements TokenSource {
     stats.lastErrorAt = new Date(now).toISOString();
     switch (outcome.kind) {
       case 'rate_limited': {
-        const cap = this.#config.poolCooldownMaxS ?? COOLDOWN.rateLimitedDefaultMaxS;
-        const adaptive = Math.min(COOLDOWN.rateLimitedBaseS * 2 ** slot.strikes, cap);
-        const s = Math.min(outcome.retryAfterSeconds ?? adaptive, COOLDOWN.rateLimitedMaxS);
-        slot.strikes++;
         const why = outcome.reason ? `rate limited (429 ${outcome.reason})` : 'rate limited (429)';
-        this.#cool(slot, now + s * 1000, why);
+        this.#hold(slot, slot.hold, outcome, why);
+        stats.lastError = why;
         break;
       }
       case 'capacity': {
-        const reason = `model capacity${outcome.model ? ` (${outcome.model})` : ''}`;
+        const why = `model capacity${outcome.model ? ` (${outcome.model})` : ''}`;
+        let hold = slot.hold;
         if (outcome.model) {
-          const until = now + COOLDOWN.capacityMs;
-          slot.modelCooldowns.set(outcome.model, until);
-          getLogger().warn({
-            msg: 'pool account model cooling down',
-            account: slot.account.id,
-            model: outcome.model,
-            until: new Date(until).toISOString(),
-          });
+          hold = slot.modelHolds.get(outcome.model) ?? newHold();
+          slot.modelHolds.set(outcome.model, hold);
         }
-        stats.lastError = reason;
-        this.#store.scheduleSave();
-        return;
+        this.#hold(slot, hold, outcome, why, outcome.model);
+        stats.lastError = why;
+        break;
       }
       case 'quota_exhausted':
         this.#cool(slot, now + COOLDOWN.quotaMs, 'quota exhausted');
+        stats.lastError = slot.cooldownReason;
         break;
       case 'unauthorized':
         this.#cool(slot, now + COOLDOWN.unauthorizedMs, 'upstream rejected the credential');
+        stats.lastError = slot.cooldownReason;
         break;
     }
-    stats.lastError = slot.cooldownReason;
     this.#store.scheduleSave();
   }
 
@@ -367,7 +437,15 @@ export class AccountPool implements TokenSource {
     return [...this.#slots.values()].map((s) => {
       const creds = s.manager.credentials();
       const cooling = s.cooldownUntil > now;
-      const models = [...s.modelCooldowns].filter(([, until]) => until > now);
+      const throttles: ThrottleView[] = [];
+      if (s.hold.until > now) {
+        throttles.push({ until: new Date(s.hold.until).toISOString(), reason: s.hold.reason });
+      }
+      for (const [model, h] of s.modelHolds) {
+        if (h.until > now) {
+          throttles.push({ model, until: new Date(h.until).toISOString(), reason: h.reason });
+        }
+      }
       return {
         id: s.account.id,
         name: s.account.name,
@@ -383,10 +461,7 @@ export class AccountPool implements TokenSource {
         status: !s.account.enabled ? 'disabled' : cooling ? 'cooling' : 'ok',
         cooldownUntil: cooling ? new Date(s.cooldownUntil).toISOString() : undefined,
         cooldownReason: cooling ? s.cooldownReason : undefined,
-        modelCooldowns:
-          models.length > 0
-            ? Object.fromEntries(models.map(([m, until]) => [m, new Date(until).toISOString()]))
-            : undefined,
+        throttles: throttles.length > 0 ? throttles : undefined,
         inflight: s.inflight,
         tokenExpiresAt: creds.expiresAt,
         hasRefreshToken: Boolean(creds.refreshToken),
@@ -465,8 +540,8 @@ export class AccountPool implements TokenSource {
         slot.account.disabledReason = undefined;
         slot.cooldownUntil = 0;
         slot.cooldownReason = undefined;
-        slot.strikes = 0;
-        slot.modelCooldowns.clear();
+        slot.hold = newHold();
+        slot.modelHolds.clear();
       }
     }
     this.#store.saveNow();
@@ -591,46 +666,81 @@ export class AccountPool implements TokenSource {
   // Internals
   // ==========================================================================
 
-  #pick(
-    affinityKey: string | undefined,
-    skip: ReadonlySet<string>,
-    model?: string,
-  ): { slot: Slot; spilled: boolean } | undefined {
+  #pick(opts: AcquireOptions, skip: ReadonlySet<string>): Picked | undefined {
     const now = Date.now();
-    const usable = (s: Slot) =>
-      s.account.enabled &&
-      s.cooldownUntil <= now &&
-      !skip.has(s.account.id) &&
-      offers(s, model) &&
-      !modelCooling(s, model, now);
-    const maxInflight = this.#config.poolMaxInflight ?? DEFAULT_MAX_INFLIGHT;
-    const full = (s: Slot) => maxInflight > 0 && s.inflight >= maxInflight;
+    const { model } = opts;
+    const ok = (s: Slot | undefined): s is Slot => !!s && inRotation(s, model, skip, now);
 
+    // A throttle retry stays on the account it already used.
+    const stay = opts.stayOn ? this.#slots.get(opts.stayOn) : undefined;
+    if (ok(stay)) return { slot: stay, how: 'sticky' };
+
+    // A known conversation stays home, even while home is on a throttle hold —
+    // unless home already carries `poolMaxInflight` requests and another account
+    // in rotation is idle-er and not on hold: then this one request spills there
+    // (the conversation keeps its home). This only matters when parallel agents
+    // share one conversation id (the client did not identify its subagents).
+    const maxInflight = this.#config.poolMaxInflight ?? DEFAULT_MAX_INFLIGHT;
+    let moved = false;
+    if (opts.affinityKey) {
+      const home = this.#home(opts.affinityKey, now);
+      if (ok(home)) {
+        if (maxInflight > 0 && home.inflight >= maxInflight) {
+          const spill = this.#leastLoaded(ok, model, now);
+          if (
+            spill &&
+            spill !== home &&
+            spill.inflight < home.inflight &&
+            holdUntil(spill, model) <= now
+          ) {
+            return { slot: spill, how: 'spilled' };
+          }
+        }
+        return { slot: home, how: 'sticky' };
+      }
+      moved = home !== undefined;
+    }
+
+    // A new subagent starts on its root conversation's account when that has room.
+    if (!moved && opts.rootKey && opts.rootKey !== opts.affinityKey) {
+      const root = this.#home(opts.rootKey, now);
+      const roomy = (s: Slot) => maxInflight <= 0 || s.inflight < maxInflight;
+      if (ok(root) && roomy(root) && holdUntil(root, model) <= now) {
+        return { slot: root, how: 'new' };
+      }
+    }
+
+    const best = this.#leastLoaded(ok, model, now);
+    return best ? { slot: best, how: moved ? 'moved' : 'new' } : undefined;
+  }
+
+  /**
+   * New placement: not on hold first, then fewest in flight, then least recently
+   * picked. If every candidate is on hold, the one that frees up first.
+   */
+  #leastLoaded(ok: (s: Slot) => boolean, model: string | undefined, now: number): Slot | undefined {
     let best: Slot | undefined;
+    let bestHold = 0;
     for (const s of this.#slots.values()) {
-      if (!usable(s)) continue;
+      if (!ok(s)) continue;
+      const h = Math.max(holdUntil(s, model), now);
       if (
         !best ||
-        s.inflight < best.inflight ||
-        (s.inflight === best.inflight && s.lastPickedAt < best.lastPickedAt)
+        h < bestHold ||
+        (h === bestHold &&
+          (s.inflight < best.inflight ||
+            (s.inflight === best.inflight && s.lastPickedAt < best.lastPickedAt)))
       ) {
         best = s;
+        bestHold = h;
       }
     }
+    return best;
+  }
 
-    if (affinityKey) {
-      const hit = this.#affinity.get(affinityKey);
-      const home = hit && now - hit.at < AFFINITY_TTL_MS ? this.#slots.get(hit.id) : undefined;
-      if (home && usable(home)) {
-        // Over the in-flight cap and someone else has room: spill this one
-        // request, keep the conversation's home (spilled=true → no re-pin).
-        if (full(home) && best && best !== home && best.inflight < home.inflight) {
-          return { slot: best, spilled: true };
-        }
-        return { slot: home, spilled: false };
-      }
-    }
-    return best ? { slot: best, spilled: false } : undefined;
+  #home(key: string, now: number): Slot | undefined {
+    const hit = this.#affinity.get(key);
+    return hit && now - hit.at < AFFINITY_TTL_MS ? this.#slots.get(hit.id) : undefined;
   }
 
   /** Count this request against `slot` until its response closes; moves on failover. */
@@ -648,16 +758,47 @@ export class AccountPool implements TokenSource {
     };
   }
 
-  /** Earliest moment an account that could serve `model` stops cooling, if any. */
-  #soonestRecovery(skip: ReadonlySet<string>, model?: string): number | undefined {
+  /**
+   * Start (or keep) a back-off hold. A throttle that lands while the hold is
+   * still running came from a request sent before it began, so it neither
+   * escalates the step nor shortens the hold; an upstream Retry-After can only
+   * lengthen it.
+   */
+  #hold(
+    slot: Slot,
+    hold: Hold,
+    outcome: { retryAfterSeconds?: number },
+    reason: string,
+    model?: string,
+  ): void {
     const now = Date.now();
-    let soonest = Number.POSITIVE_INFINITY;
-    for (const s of this.#slots.values()) {
-      if (!s.account.enabled || skip.has(s.account.id) || !offers(s, model)) continue;
-      const until = Math.max(s.cooldownUntil, modelCooldownUntil(s, model));
-      if (until > now) soonest = Math.min(soonest, until);
-    }
-    return Number.isFinite(soonest) ? soonest : undefined;
+    const capS = this.#config.poolBackoffMaxS ?? BACKOFF.defaultMaxS;
+    const running = hold.until > now;
+    if (running && outcome.retryAfterSeconds === undefined) return;
+    const ms = backoffMs(hold.strikes, capS, outcome.retryAfterSeconds);
+    hold.until = Math.max(hold.until, now + ms);
+    hold.reason = reason;
+    if (!running) hold.strikes++;
+    getLogger().info({
+      msg: 'pool account throttled, requests wait on it',
+      account: slot.account.id,
+      model,
+      reason,
+      hold_ms: hold.until - now,
+      strikes: hold.strikes,
+    });
+  }
+
+  #throttledError(waitMs: number): ProviderError {
+    return new ProviderError(
+      {
+        kind: 'rate_limited',
+        status: 429,
+        retryAfterSeconds: Math.max(1, Math.ceil(waitMs / 1000)),
+      },
+      '',
+      'pool throttle wait budget used up',
+    );
   }
 
   #setAffinity(key: string, id: string): void {
@@ -712,17 +853,17 @@ export class AccountPool implements TokenSource {
     if (model && enabled.length > 0 && !enabled.some((s) => offers(s, model))) {
       return new ProviderError({ kind: 'model_unavailable', model }, '');
     }
+    // Only hard cooldowns (quota / credential) can leave nothing in rotation.
     let soonest = Number.POSITIVE_INFINITY;
     for (const s of enabled) {
       if (!offers(s, model) || skip.has(s.account.id)) continue;
-      const until = Math.max(s.cooldownUntil, modelCooldownUntil(s, model));
-      if (until > now) soonest = Math.min(soonest, until);
+      if (s.cooldownUntil > now) soonest = Math.min(soonest, s.cooldownUntil);
     }
     if (Number.isFinite(soonest)) {
       return new ProviderError(
         { kind: 'rate_limited', status: 429, retryAfterSeconds: Math.ceil((soonest - now) / 1000) },
         '',
-        'all pool accounts are cooling down',
+        'no pool account is usable right now',
       );
     }
     return new ProviderError({ kind: 'transient', status: 503 }, '', 'no usable pool account');
@@ -735,8 +876,8 @@ export class AccountPool implements TokenSource {
       cooldownUntil: 0,
       lastPickedAt: 0,
       inflight: 0,
-      strikes: 0,
-      modelCooldowns: new Map(),
+      hold: newHold(),
+      modelHolds: new Map(),
     };
   }
 
@@ -778,8 +919,8 @@ export class AccountPool implements TokenSource {
       cooldownUntil: 0,
       lastPickedAt: 0,
       inflight: 0,
-      strikes: 0,
-      modelCooldowns: new Map(),
+      hold: newHold(),
+      modelHolds: new Map(),
     };
     this.#slots.set(KIRO_CLI_ACCOUNT_ID, slot);
   }

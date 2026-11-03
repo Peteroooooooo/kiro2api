@@ -170,7 +170,7 @@ plugin-derived 据此反演(`gptCacheDerivedBreakdown`):按隐藏推理 = 0 解�
 
 典型形态:一批下游错误全部来自上游 5xx、网关自身零错误。判别顺序:① 同容器跨模型——同时段某模型大面积失败、另一模型零失败 → 上游按模型容量短缺(上游 429/5xx 日志行不带模型字段,按 `reqId` 关联 info 级入口行的 `model`;`mapped_model` 只在 `debug`);② 分钟级时间轴——失败集中在短窗口、之后流量更高却不失败 → 是事件非长期状态;③ 请求形状(`max_tokens` / `tool_count` / `system_length`)分布相同 → 非 converter 问题;④ region / profileArn / `tier` 全同 → 非路由或配额。别按主机 / 账号先分桶(会误推「账号被封」)。有界重试无效(上游恢复远慢于请求内重试),有效缓解是切模型。日志看 `capacity_reason`,别 substring 匹配 `error`。
 
-号池模式下的例外(2026-11):容量类 429/5xx 记为 `capacity` outcome,只冷却**该账号的该模型** 15 s,并最多换**一个**账号再试(`KIRO2CLAUDE_POOL_CAPACITY_FAILOVER`,默认开)。动机:11-02 一个会话的 27 次 `INSUFFICIENT_MODEL_CAPACITY` 全落在同一账号,另外两个号一次没试。第二个账号也报容量不足就按上面的结论原样透传,不遍历全池。换号是否真能绕开容量短缺尚无定论,看 `capacity failover succeeded` 日志行的占比再决定去留。
+号池模式下的例外(2026-11-03 起):容量类 429/5xx 和账号级 429 一样算**限速**,在网关里**原号等待重试**(2 → 4 → 8 → 15 s 带抖动,单请求总等待 ≤ `KIRO2CLAUDE_POOL_THROTTLE_WAIT_MS`,默认 45 s),不换号、不把账号踢出轮转。11-02 版「换一个号再试」已撤销:11-03 日志里换过去的第二个号 1 秒内同样回 `INSUFFICIENT_MODEL_CAPACITY`,只有 3 次换号成功,却让 4 个号全进冷却、拦住了别的会话,还打掉了每号的前缀缓存。模型永不降级。
 
 ### 容量不足的 5xx 为何是 503 而非 502
 
@@ -190,15 +190,16 @@ plugin-derived 据此反演(`gptCacheDerivedBreakdown`):按隐藏推理 = 0 解�
 
 流中途的异常帧不看 reason:`ThrottlingException` 帧仍按可重试 503,客户端重发后新请求在建流前拿到 402 / 429。
 
-### 号池调度:软粘性 + 自适应冷却 + 短等待
+### 号池调度:限速就等,号坏了才换
 
-11-01 的事故形态:一个 Claude Code 会话(主 agent + 并行子 agent 共用 `rootConversationId`)6 小时粘在一个账号上,单号一天 1954 次请求,触发上游 `USER_REQUEST_RATE_EXCEEDED`;旧逻辑无 Retry-After 时固定冷却 60 s,池里没别的可用号,接下来一分钟网关在 30~500 ms 内直接回了上千个 429(`account_name` 为空的那批),客户端立刻重试又撞上。现在的规则(`pool/account-pool.ts` 头注释):
+11-01 的事故形态:一个 Claude Code 会话 6 小时粘在一个账号上,单号一天 1954 次请求,触发上游 `USER_REQUEST_RATE_EXCEEDED`;旧逻辑固定冷却 60 s,网关在 30~500 ms 内直接回了上千个 429。11-02 版改成冷却 + 换号,11-03 又暴露出换号太频繁:容量不足是上游整体的,换号换不出成功。现在的规则(`pool/account-pool.ts` 头注释):
 
-- 粘性账号在途请求 ≥ `KIRO2CLAUDE_POOL_MAX_INFLIGHT`(默认 4)且别的号更空,本次请求溢出、会话不改绑;新会话选在途最少的号。在途计数挂在请求上下文的 `poolLease` 上,响应 `close` 时释放(流式要到最后一个字节)。
-- 账号级 429:有 Retry-After 用它,否则 5 → 10 → 20 … s,封顶 `KIRO2CLAUDE_POOL_COOLDOWN_MAX_S`(默认 120),成功一次清零。冷却原因带上游 reason。
-- 全池冷却时最近恢复点在 `KIRO2CLAUDE_POOL_WAIT_MS`(默认 8 s)内就由网关等,否则回 429 + 真实 Retry-After。
+- **限速**(429 rate / 容量不足 / 5xx overloaded):给该号(容量不足只给该号的该模型)挂一个退避 hold,请求在网关里**原号**等它结束再发;Retry-After 优先,否则 2 → 4 → 8 → 15 s(`KIRO2CLAUDE_POOL_BACKOFF_MAX_S`)±25% 抖动,成功一次清零。hold 期间到达的旧请求的 429 不再加码。超出 `KIRO2CLAUDE_POOL_THROTTLE_WAIT_MS` 才回 429 + Retry-After。
+- **账号故障**(额度用完 6 h / 凭据被拒 10 min / 刷新失败 5 min):踢出轮转,请求换号,会话改绑到新号。
+- 会话键 = 自己的 `conversationId`:subagent 各自固定一个号,第一次优先落在主会话的号上(该号在途 < `KIRO2CLAUDE_POOL_MAX_INFLIGHT`、且没在退避),之后不再变。客户端没区分 subagent(同一会话 id 并发)时,主号满了这一次请求溢出到更空的号,会话不改绑。
+- 新会话优先选没在退避、在途最少的号。
 
-`accounts_tried` 只在试过 ≥ 2 个号时才写,单号请求为空是设计如此,不是丢数据。
+`accounts_tried` 只在试过 ≥ 2 个号时才写,单号请求为空是设计如此。现在它只会出现在账号故障时;限速重试记在 `throttle_retries` / `throttle_wait_ms`。
 
 ## 日志四条守卫的理由
 
