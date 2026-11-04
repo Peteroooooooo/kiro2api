@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { StreamContext } from '../../src/claude/stream.js';
 import {
+  estimatedPromptSplit,
   localPromptSplit,
   notePromptServed,
   PromptCacheTracker,
   promptShapeOf,
 } from '../../src/kiro/prompt-cache.js';
-import { UsageFinishEventImpl } from '../../src/plugin-host/index.js';
+import { HookBus, UsageFinishEventImpl } from '../../src/plugin-host/index.js';
 import { getLogger } from '../../src/shared/logger.js';
 import { type RequestContext, requestContextStorage } from '../../src/shared/request-context.js';
 import { countUpstreamTokens, estimateOutputTokens, TokenTally } from '../../src/token.js';
@@ -182,6 +184,32 @@ describe('localPromptSplit', () => {
   it('is undefined until an upstream call succeeded', () => {
     expect(inContext({}, () => localPromptSplit(event(1_000, 10, true)))).toBeUndefined();
     expect(localPromptSplit(event(1_000, 10, true))).toBeUndefined();
+  });
+
+  it('estimatedPromptSplit cuts the request estimate by the same share, input 0', () => {
+    const at = (read: number, total: number) =>
+      inContext({ promptCache: { read, total } }, () => estimatedPromptSplit(1_000));
+    expect(at(30, 100)).toEqual({ inputTokens: 0, cacheReadTokens: 300, cacheWriteTokens: 700 });
+    // zero in the final split ⇔ zero here (Claude Code keeps message_start values over zero deltas)
+    expect(at(0, 100)).toEqual({ inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 1_000 });
+    expect(at(100, 100)).toEqual({ inputTokens: 0, cacheReadTokens: 1_000, cacheWriteTokens: 0 });
+    expect(inContext({}, () => estimatedPromptSplit(1_000))).toBeUndefined();
+  });
+
+  it('message_start carries the estimated split once the tracker has a result', () => {
+    const start = (ctx: Partial<RequestContext>) =>
+      inContext(ctx, () => {
+        const stream = new StreamContext('claude-opus-5-5', 1_000, false, new Map(), new HookBus());
+        return (stream.createMessageStartEvent().message as { usage: Record<string, number> })
+          .usage;
+      });
+    expect(start({ promptCache: { read: 30, total: 100 } })).toEqual({
+      input_tokens: 0,
+      cache_creation_input_tokens: 700,
+      cache_read_input_tokens: 300,
+      output_tokens: 1,
+    });
+    expect(start({})).toEqual({ input_tokens: 1_000, output_tokens: 1 });
   });
 
   it('notePromptServed records the hit on the request context', () => {

@@ -6,7 +6,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import type { Event, KiroMeteringData } from '../kiro/model/events/base.js';
-import { localPromptSplit } from '../kiro/prompt-cache.js';
+import { estimatedPromptSplit, localPromptSplit } from '../kiro/prompt-cache.js';
 import { type HookBus, UsageFinishEventImpl } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
@@ -954,6 +954,7 @@ export class StreamContext {
 
   /** Create message_start event data */
   createMessageStartEvent(): Record<string, unknown> {
+    const split = estimatedPromptSplit(this.inputTokens);
     return {
       type: 'message_start',
       message: {
@@ -964,10 +965,17 @@ export class StreamContext {
         model: this.model,
         stop_reason: null,
         stop_sequence: null,
-        usage: {
-          input_tokens: this.inputTokens,
-          output_tokens: 1,
-        },
+        usage: split
+          ? {
+              input_tokens: split.inputTokens,
+              cache_creation_input_tokens: split.cacheWriteTokens,
+              cache_read_input_tokens: split.cacheReadTokens,
+              output_tokens: 1,
+            }
+          : {
+              input_tokens: this.inputTokens,
+              output_tokens: 1,
+            },
       },
     };
   }
