@@ -11,7 +11,7 @@ import {
 } from '../../src/kiro/retry-executor.js';
 import { SingleTokenManager } from '../../src/kiro/token-manager.js';
 import type { Config } from '../../src/model/config.js';
-import { AccountPool } from '../../src/pool/account-pool.js';
+import { AccountPool, extraQuotaOf } from '../../src/pool/account-pool.js';
 import { AccountStore, emptyStats, type StoredAccount } from '../../src/pool/account-store.js';
 import { type RequestContext, requestContextStorage } from '../../src/shared/request-context.js';
 import { makeRequest, makeStubAxios } from '../helpers/retry-executor-stubs.js';
@@ -232,6 +232,84 @@ describe('AccountPool quota refresh', () => {
       });
       await pool.refreshQuota('a');
       expect(pool.list().find((x) => x.id === 'a')?.status).toBe('ok');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  const trialBonus = (current: number, expiresAt: number, status = 'ACTIVE') => ({
+    bonusType: 'FIRST_UPGRADE_TRIAL',
+    currentUsage: current,
+    usageLimit: 500,
+    status,
+    expiresAt,
+  });
+  const monthlyUsedUp = (bonuses: ReturnType<typeof trialBonus>[]) => ({
+    usageBreakdownList: [
+      {
+        currentUsage: 50,
+        currentUsageWithPrecision: 50,
+        usageLimit: 50,
+        usageLimitWithPrecision: 50,
+        bonuses,
+      },
+    ],
+  });
+
+  it('keeps an account in rotation while its extra credits last after the monthly plan is used up', async () => {
+    const { pool } = makePool(['a', 'b']);
+    const later = Date.now() / 1000 + 86_400 * 365;
+    const spy = vi
+      .spyOn(SingleTokenManager.prototype, 'getUsageLimits')
+      .mockResolvedValue(monthlyUsedUp([trialBonus(120, later)]));
+    try {
+      const quota = await pool.refreshQuota('a');
+      expect(quota?.limit).toBe(50);
+      expect(quota?.extra).toMatchObject({ limit: 500, current: 120 });
+      expect(Date.parse(quota?.extra?.expiresAt ?? '')).toBe(Math.trunc(later * 1000));
+      expect(pool.list().find((x) => x.id === 'a')?.status).toBe('ok');
+
+      spy.mockResolvedValue(monthlyUsedUp([trialBonus(500, later)]));
+      await pool.refreshQuota('a');
+      expect(pool.list().find((x) => x.id === 'a')?.status).toBe('cooling');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('ignores extra credits that are expired or not active', () => {
+    const now = Date.now();
+    const b = monthlyUsedUp([
+      trialBonus(0, now / 1000 - 60),
+      trialBonus(0, now / 1000 + 60, 'EXPIRED'),
+    ]).usageBreakdownList[0];
+    expect(extraQuotaOf(b, now)).toBeUndefined();
+  });
+
+  it('books locally counted credits past the monthly limit on the extra credits', async () => {
+    const { pool } = makePool(['a']);
+    const spy = vi.spyOn(SingleTokenManager.prototype, 'getUsageLimits').mockResolvedValue({
+      usageBreakdownList: [
+        {
+          currentUsage: 49,
+          currentUsageWithPrecision: 49,
+          usageLimit: 50,
+          usageLimitWithPrecision: 50,
+          bonuses: [trialBonus(0, Date.now() / 1000 + 86_400)],
+        },
+      ],
+    });
+    try {
+      await pool.refreshQuota('a');
+      pool.recordCredits('a', 3);
+      const q = pool.list()[0]?.quota;
+      expect(q?.current).toBe(50);
+      expect(q?.extra?.current).toBe(2);
+      expect(pool.aggregateQuota()).toMatchObject({
+        limit: 50,
+        current: 50,
+        extra: { limit: 500, current: 2 },
+      });
     } finally {
       spy.mockRestore();
     }

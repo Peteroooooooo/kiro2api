@@ -57,7 +57,7 @@
 
 import type { LoadedCredentials } from '../kiro/credentials-loader.js';
 import type { KiroCredentials } from '../kiro/model/credentials.js';
-import type { UsageLimitsResponse } from '../kiro/model/usage-limits.js';
+import type { UsageBreakdown, UsageLimitsResponse } from '../kiro/model/usage-limits.js';
 import { ProviderError } from '../kiro/provider-error.js';
 import {
   type CredentialPersistence,
@@ -78,10 +78,65 @@ import { noteAccountAttempt, noteThrottleWait } from '../shared/request-log.js';
 import {
   type AccountSource,
   type AccountStore,
+  type ExtraQuota,
   emptyStats,
   newAccountId,
   type StoredAccount,
 } from './account-store.js';
+
+/**
+ * Active bonus / free-trial credits of a usage breakdown, summed. Upstream timestamps are
+ * seconds. Grants that are not ACTIVE or already expired are left out.
+ */
+export function extraQuotaOf(
+  b: UsageBreakdown | undefined,
+  now = Date.now(),
+): ExtraQuota | undefined {
+  if (!b) return undefined;
+  type Grant = { limit: number; current: number; expiresAt?: number; status?: string };
+  const grants: Grant[] = (b.bonuses ?? []).map((x) => ({
+    limit: x.usageLimit,
+    current: x.currentUsage,
+    expiresAt: x.expiresAt,
+    status: x.status,
+  }));
+  const t = b.freeTrialInfo;
+  if (t) {
+    grants.push({
+      limit: t.usageLimitWithPrecision ?? t.usageLimit,
+      current: t.currentUsageWithPrecision ?? t.currentUsage,
+      expiresAt: t.freeTrialExpiry,
+      status: t.freeTrialStatus,
+    });
+  }
+  let limit = 0;
+  let current = 0;
+  let earliest: number | undefined;
+  for (const g of grants) {
+    if (g.status !== undefined && g.status !== 'ACTIVE') continue;
+    if (g.expiresAt !== undefined && g.expiresAt * 1000 <= now) continue;
+    if (!(g.limit > 0)) continue;
+    limit += g.limit;
+    current += Number.isFinite(g.current) ? g.current : 0;
+    if (g.expiresAt !== undefined && (earliest === undefined || g.expiresAt < earliest))
+      earliest = g.expiresAt;
+  }
+  if (limit <= 0) return undefined;
+  return {
+    limit,
+    current,
+    ...(earliest !== undefined ? { expiresAt: new Date(earliest * 1000).toISOString() } : {}),
+  };
+}
+
+/** True when neither the monthly plan nor any active extra grant has credits left. */
+function quotaExhausted(q: StoredAccount['quota']): boolean {
+  if (!q || !(q.limit > 0) || q.current < q.limit) return false;
+  const x = q.extra;
+  if (x && x.current < x.limit && !(x.expiresAt && Date.parse(x.expiresAt) <= Date.now()))
+    return false;
+  return true;
+}
 
 const KIRO_CLI_ACCOUNT_ID = 'kiro-cli';
 const AFFINITY_TTL_MS = 6 * 3_600_000;
@@ -412,20 +467,31 @@ export class AccountPool implements TokenSource {
     const slot = this.#slots.get(accountId);
     if (!slot || !Number.isFinite(credits)) return;
     slot.account.stats.credits += credits;
-    if (slot.account.quota) slot.account.quota.current += credits;
+    const q = slot.account.quota;
+    if (q) {
+      // Upstream spends the monthly plan before the extra grants (observed 2026-11-05).
+      const toPlan = q.extra ? Math.min(credits, Math.max(0, q.limit - q.current)) : credits;
+      q.current += toPlan;
+      if (q.extra) q.extra.current += credits - toPlan;
+    }
     this.#store.scheduleSave();
   }
 
-  /** Sum of the last known quotas of enabled accounts (for the metering plugin). */
-  aggregateQuota(): { limit: number; current: number } {
+  /** Sum of the last known quotas of enabled accounts; `extra` is the active bonus / trial credits. */
+  aggregateQuota(): { limit: number; current: number; extra: { limit: number; current: number } } {
     let limit = 0;
     let current = 0;
+    const extra = { limit: 0, current: 0 };
     for (const s of this.#slots.values()) {
       if (!s.account.enabled || !s.account.quota) continue;
       limit += s.account.quota.limit;
       current += s.account.quota.current;
+      if (s.account.quota.extra) {
+        extra.limit += s.account.quota.extra.limit;
+        extra.current += s.account.quota.extra.current;
+      }
     }
-    return { limit, current };
+    return { limit, current, extra };
   }
 
   // ==========================================================================
@@ -607,9 +673,11 @@ export class AccountPool implements TokenSource {
     if (!slot) throw new Error(`unknown pool account: ${id}`);
     const raw = await slot.manager.getUsageLimits();
     const b = raw.usageBreakdownList?.[0];
+    const extra = extraQuotaOf(b);
     const quota = {
       limit: b?.usageLimitWithPrecision ?? b?.usageLimit ?? 0,
       current: b?.currentUsageWithPrecision ?? b?.currentUsage ?? 0,
+      ...(extra ? { extra } : {}),
       checkedAt: new Date().toISOString(),
     };
     slot.account.quota = quota;
@@ -621,7 +689,7 @@ export class AccountPool implements TokenSource {
     if (raw.subscriptionInfo?.subscriptionTitle) {
       slot.account.subscription = raw.subscriptionInfo.subscriptionTitle;
     }
-    if (quota.limit > 0 && quota.current >= quota.limit) {
+    if (quotaExhausted(quota)) {
       const resetAt = (b?.nextDateReset ?? raw.nextDateReset ?? 0) * 1000;
       this.#cool(
         slot,
