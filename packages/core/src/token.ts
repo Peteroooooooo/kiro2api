@@ -163,6 +163,21 @@ export function countUpstreamTokens(text: string): number {
   return tally.tokens;
 }
 
+/**
+ * Output tokens per character of a Claude thinking signature. The upstream bills the model's full
+ * reasoning as output but streams only a short summary of it; the signature carries the encrypted
+ * full reasoning, so its length tracks the billed part the gateway cannot read. Fitted 2026-11-05
+ * on 215 claude-opus-5.5 turns against credits: the median credit / local-cost ratio went from
+ * 1.13 to 1.00 (held out: 1.09 → 0.99); turns without thinking already matched. GPT reasoning is
+ * opaque and never reaches this path.
+ */
+const SIGNATURE_TOKENS_PER_CHAR = 0.24;
+
+/** Billed reasoning hidden behind a thinking signature, in output tokens. */
+export function hiddenReasoningTokens(signature: string): number {
+  return Math.round(signature.length * SIGNATURE_TOKENS_PER_CHAR);
+}
+
 /** 调用远程 count_tokens API */
 async function callRemoteCountTokens(
   apiUrl: string,
@@ -274,15 +289,22 @@ function countAllTokensLocal(
   return Math.max(total, 1);
 }
 
-/** 估算输出 tokens(text、thinking、tool_use 入参),口径见 {@link TokenTally}。 */
+/**
+ * 估算输出 tokens(text、thinking、tool_use 入参,加 thinking 签名背后的隐藏推理),口径见
+ * {@link TokenTally} 与 {@link hiddenReasoningTokens}。
+ */
 export function estimateOutputTokens(content: Record<string, unknown>[]): number {
   const tally = new TokenTally();
+  let hidden = 0;
 
   for (const block of content) {
     if (typeof block.text === 'string') tally.add(block.text);
     if (typeof block.thinking === 'string') tally.add(block.thinking);
+    if (block.type === 'thinking' && typeof block.signature === 'string') {
+      hidden += hiddenReasoningTokens(block.signature);
+    }
     if (block.type === 'tool_use' && block.input) tally.add(JSON.stringify(block.input));
   }
 
-  return Math.max(tally.tokens, 1);
+  return Math.max(tally.tokens + hidden, 1);
 }

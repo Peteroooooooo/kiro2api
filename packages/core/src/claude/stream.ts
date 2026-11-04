@@ -11,7 +11,7 @@ import { type HookBus, UsageFinishEventImpl } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
 import { noteFirstToken, noteRequestLog } from '../shared/request-log.js';
-import { countUpstreamTokens, TokenTally } from '../token.js';
+import { countUpstreamTokens, hiddenReasoningTokens, TokenTally } from '../token.js';
 import { clientModelHasEncryptedReasoning, mapModel, resolveContextUsage } from './converter.js';
 import {
   type LegacyThinkingBoundaryReason,
@@ -797,6 +797,8 @@ export class StreamContext {
   outputTokens: number;
   /** Feeds `outputTokens`: visible text, thinking and tool input, counted as one stream. */
   private outputTally = new TokenTally();
+  /** Feeds `outputTokens`: billed reasoning behind thinking signatures, see hiddenReasoningTokens. */
+  private hiddenReasoning = 0;
   /**
    * True once a *complete* tool_use (isComplete) has been processed — even one
    * whose input object is empty, e.g. a no-required-args tool like
@@ -1143,7 +1145,12 @@ export class StreamContext {
 
   private countOutput(text: string): void {
     this.outputTally.add(text);
-    this.outputTokens = this.outputTally.tokens;
+    this.outputTokens = this.outputTally.tokens + this.hiddenReasoning;
+  }
+
+  private countHiddenReasoning(signature: string): void {
+    this.hiddenReasoning += hiddenReasoningTokens(signature);
+    this.outputTokens = this.outputTally.tokens + this.hiddenReasoning;
   }
 
   /** Process assistant response event */
@@ -1238,6 +1245,8 @@ export class StreamContext {
       events.push(this.createThinkingDeltaEvent(this.reasoningBlockIndex, text));
       this.countOutput(text);
     }
+
+    if (signature) this.countHiddenReasoning(signature);
 
     if (signature && this.reasoningBlockIndex !== undefined) {
       const sigEvent = this.stateManager.handleContentBlockDelta(this.reasoningBlockIndex, {

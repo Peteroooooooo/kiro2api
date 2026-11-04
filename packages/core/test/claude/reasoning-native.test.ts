@@ -654,6 +654,16 @@ describe('stream: processReasoningContent', () => {
     expect(ctx.thinkingExtracted).toBe(true);
   });
 
+  it('signature 背后的隐藏推理计入输出 token(0.24 / 签名字符)', () => {
+    const ctx = makeContext(true);
+    ctx.processKiroEvent({ kind: 'ReasoningContent', text: 'Let me think.', signature: undefined });
+    const visible = ctx.outputTokens;
+    ctx.processKiroEvent({ kind: 'ReasoningContent', text: '', signature: 'A'.repeat(1000) });
+    expect(ctx.outputTokens).toBe(visible + 240);
+    ctx.processKiroEvent({ kind: 'AssistantResponse', content: 'done' });
+    expect(ctx.outputTokens).toBeGreaterThan(visible + 240);
+  });
+
   it('ReasoningContent 后切到 AssistantResponse → 关 thinking block + 开 text block', () => {
     const ctx = makeContext(true);
     ctx.generateInitialEvents();
