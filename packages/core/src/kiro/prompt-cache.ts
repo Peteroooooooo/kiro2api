@@ -225,3 +225,17 @@ export function localPromptSplit(event: UsageFinishEvent): LocalPromptSplit | un
   const read = hit.total > 0 ? Math.round((prompt * hit.read) / hit.total) : 0;
   return { inputTokens: 0, cacheReadTokens: read, cacheWriteTokens: prompt - read };
 }
+
+/**
+ * The split sent in `message_start`, before the upstream has reported the prompt size: the
+ * request-side estimate cut by the same cached share as {@link localPromptSplit}. Claude Code
+ * ignores zero fields in the closing `message_delta` and keeps the `message_start` value, so
+ * `input_tokens` must already be 0 here, and a cache field is zero here exactly when it is zero
+ * in the final split. Undefined when the request has no tracker result.
+ */
+export function estimatedPromptSplit(estimate: number): LocalPromptSplit | undefined {
+  const hit = getRequestContext()?.promptCache;
+  if (!hit) return undefined;
+  const read = hit.total > 0 ? Math.round((estimate * hit.read) / hit.total) : 0;
+  return { inputTokens: 0, cacheReadTokens: read, cacheWriteTokens: estimate - read };
+}

@@ -304,6 +304,7 @@ KAS 形态:assistant 侧 `{content, toolUses:[{toolUseId,name,input}], reasoning
 - **prompt 总量** = T − 本地输出;拿不到 contextUsage 时用请求侧估算。
 - **拆分**:请求被上游接受时(`RetryExecutor` 成功分支 `notePromptServed`),按账号 + 模型(GPT 再加 conversationId)查最近 5 分钟发过的前缀哈希(工具 → 每条 history → 当前消息,当前消息和它下一轮作为 history 重放时哈希相同),最长命中段占本次 prompt 的比例 × prompt 总量 = 缓存读,其余 = 缓存写,`input_tokens` = 0(未命中与写入同价,全记成写)。
 - wire 上插件覆写仍优先(`KIRO2CLAUDE_DERIVED_OVERRIDE=true` 恢复旧行为);admin 请求日志只记本地数,`accounting` 列标来源,改版前的行是 `NULL`(页面按「credits 反推」灰显)。
+- **`message_start` 也要按本地拆分发**(`estimatedPromptSplit`:请求侧估算 × 同一命中比例,`input_tokens` = 0)。Claude Code 收尾时只采纳 `message_delta` 里的非零字段,0 会被 `message_start` 的旧值顶替;原来 `message_start` 发的是整段估算,结果客户端记成「输入 7 万 + 缓存读 21 万」,上下文被多算一截,自动压缩会提前触发。
 
 本地模型只看本网关发过什么,所以它会漏掉:进程重启后的第一轮(实际可能命中)、同一账号被别的客户端用过的前缀。它会多算的:上游个别没命中的分叉。复核方法:按上面的单价用 `缓存读 × 3.333e-6 + 缓存写 × 1.227e-5 + 输出 × 2.215e-4` 去对 `credits`,看偏差。
 
