@@ -76,6 +76,15 @@ describe('TokenTally', () => {
     expect(all).toBeGreaterThan(2 * text);
     expect(estimateOutputTokens([])).toBe(1);
   });
+
+  it('estimateOutputTokens adds the reasoning hidden behind a thinking signature', () => {
+    const plain = estimateOutputTokens([{ type: 'thinking', thinking: 'hello world' }]);
+    const signed = estimateOutputTokens([
+      { type: 'thinking', thinking: 'hello world', signature: 'A'.repeat(1000) },
+    ]);
+    expect(signed).toBe(plain + 240);
+    expect(estimateOutputTokens([{ type: 'redacted_thinking', data: 'A'.repeat(1000) }])).toBe(1);
+  });
 });
 
 describe('promptShapeOf', () => {
