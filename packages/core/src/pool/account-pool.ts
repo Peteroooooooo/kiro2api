@@ -462,22 +462,19 @@ export class AccountPool implements TokenSource {
     this.#store.scheduleSave();
   }
 
-  /** Credits billed upstream for a request this account served. */
+  /**
+   * Credits billed upstream for a request this account served. Only the per-account total;
+   * `quota` stays the last upstream snapshot, because the billing event does not say which
+   * grant (monthly or extra) paid for the request.
+   */
   recordCredits(accountId: string, credits: number): void {
     const slot = this.#slots.get(accountId);
     if (!slot || !Number.isFinite(credits)) return;
     slot.account.stats.credits += credits;
-    const q = slot.account.quota;
-    if (q) {
-      // Upstream spends the monthly plan before the extra grants (observed 2026-11-05).
-      const toPlan = q.extra ? Math.min(credits, Math.max(0, q.limit - q.current)) : credits;
-      q.current += toPlan;
-      if (q.extra) q.extra.current += credits - toPlan;
-    }
     this.#store.scheduleSave();
   }
 
-  /** Sum of the last known quotas of enabled accounts; `extra` is the active bonus / trial credits. */
+  /** Sum of the last upstream quota snapshots of enabled accounts; `extra` is the active bonus / trial credits. */
   aggregateQuota(): { limit: number; current: number; extra: { limit: number; current: number } } {
     let limit = 0;
     let current = 0;

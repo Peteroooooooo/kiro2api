@@ -254,7 +254,7 @@ async function main(): Promise<void> {
   // 取，避免直接依赖 SingleTokenManager 这个 kiro-specific 类。
   const usageLimitsProvider: UsageLimitsProvider = {
     async getUsageLimits() {
-      // 号池：各账号最近一次查询到的额度之和（加上之后累计的 credits），不逐个打上游。
+      // 号池：各账号最近一次从上游查到的额度之和，不逐个打上游。
       if (pool) return pool.aggregateQuota();
       const raw = await tokenManager.getUsageLimits();
       const breakdown = raw.usageBreakdownList?.[0];

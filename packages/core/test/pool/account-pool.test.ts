@@ -286,7 +286,7 @@ describe('AccountPool quota refresh', () => {
     expect(extraQuotaOf(b, now)).toBeUndefined();
   });
 
-  it('books locally counted credits past the monthly limit on the extra credits', async () => {
+  it('keeps the quota at the upstream snapshot when requests are billed', async () => {
     const { pool } = makePool(['a']);
     const spy = vi.spyOn(SingleTokenManager.prototype, 'getUsageLimits').mockResolvedValue({
       usageBreakdownList: [
@@ -302,13 +302,14 @@ describe('AccountPool quota refresh', () => {
     try {
       await pool.refreshQuota('a');
       pool.recordCredits('a', 3);
-      const q = pool.list()[0]?.quota;
-      expect(q?.current).toBe(50);
-      expect(q?.extra?.current).toBe(2);
+      const view = pool.list()[0];
+      expect(view?.stats.credits).toBe(3);
+      expect(view?.quota?.current).toBe(49);
+      expect(view?.quota?.extra?.current).toBe(0);
       expect(pool.aggregateQuota()).toMatchObject({
         limit: 50,
-        current: 50,
-        extra: { limit: 500, current: 2 },
+        current: 49,
+        extra: { limit: 500, current: 0 },
       });
     } finally {
       spy.mockRestore();
