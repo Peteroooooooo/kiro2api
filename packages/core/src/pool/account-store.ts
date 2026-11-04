@@ -36,6 +36,8 @@ export interface AccountQuota {
   current: number;
   limit: number;
   extra?: ExtraQuota;
+  /** Credits the upstream billing events reported since `checkedAt`; reset on every query. */
+  sinceCheck?: number;
   checkedAt: string;
 }
 

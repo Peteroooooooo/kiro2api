@@ -453,6 +453,7 @@ a { color: var(--accent); }
           + '<div class="bar"><i style="width:' + pct.toFixed(1) + '%"></i></div>'
           + (x ? '<div class="sub">额外额度 已用 ' + fmtNum(x.current) + ' / ' + fmtNum(x.limit)
             + (x.expiresAt ? '，' + new Date(x.expiresAt).toLocaleString() + ' 到期' : '') + '</div>' : '')
+          + (a.quota.sinceCheck > 0 ? '<div class="sub" title="上次查询后，上游计费事件报的 credits 之和；查额度后归零">查询后已用 ' + fmtNum(a.quota.sinceCheck) + '</div>' : '')
           + '<div class="sub">查询于 ' + fmtTime(a.quota.checkedAt) + '</div>';
       }
       var subParts = [];
@@ -520,6 +521,7 @@ a { color: var(--accent); }
         + '<span class="stat">停用 <b>' + s.disabled + '</b></span>'
         + '<span class="stat">总额度 <b>' + fmtNum(s.quota.current) + ' / ' + fmtNum(s.quota.limit) + '</b>'
         + (s.quota.extra && s.quota.extra.limit > 0 ? '<span class="plus">+' + fmtNum(s.quota.extra.limit - s.quota.extra.current) + '</span>' : '')
+        + (s.quota.sinceCheck > 0 ? '，查询后已用 <b>' + fmtNum(s.quota.sinceCheck) + '</b>' : '')
         + '</span>';
       render(r[1].accounts);
     }).catch(function (e) { if (e.message !== 'unauthorized') setMsg('加载失败：' + e.message); });
