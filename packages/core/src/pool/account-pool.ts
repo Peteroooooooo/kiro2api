@@ -463,32 +463,41 @@ export class AccountPool implements TokenSource {
   }
 
   /**
-   * Credits billed upstream for a request this account served. Only the per-account total;
-   * `quota` stays the last upstream snapshot, because the billing event does not say which
-   * grant (monthly or extra) paid for the request.
+   * Credits billed upstream for a request this account served. The quota itself stays the
+   * last upstream snapshot, because the billing event does not say which grant (monthly or
+   * extra) paid for the request; the credits only add up in `quota.sinceCheck`.
    */
   recordCredits(accountId: string, credits: number): void {
     const slot = this.#slots.get(accountId);
     if (!slot || !Number.isFinite(credits)) return;
     slot.account.stats.credits += credits;
+    const q = slot.account.quota;
+    if (q) q.sinceCheck = (q.sinceCheck ?? 0) + credits;
     this.#store.scheduleSave();
   }
 
   /** Sum of the last upstream quota snapshots of enabled accounts; `extra` is the active bonus / trial credits. */
-  aggregateQuota(): { limit: number; current: number; extra: { limit: number; current: number } } {
+  aggregateQuota(): {
+    limit: number;
+    current: number;
+    extra: { limit: number; current: number };
+    sinceCheck: number;
+  } {
     let limit = 0;
     let current = 0;
+    let sinceCheck = 0;
     const extra = { limit: 0, current: 0 };
     for (const s of this.#slots.values()) {
       if (!s.account.enabled || !s.account.quota) continue;
       limit += s.account.quota.limit;
       current += s.account.quota.current;
+      sinceCheck += s.account.quota.sinceCheck ?? 0;
       if (s.account.quota.extra) {
         extra.limit += s.account.quota.extra.limit;
         extra.current += s.account.quota.extra.current;
       }
     }
-    return { limit, current, extra };
+    return { limit, current, extra, sinceCheck };
   }
 
   // ==========================================================================
@@ -675,6 +684,7 @@ export class AccountPool implements TokenSource {
       limit: b?.usageLimitWithPrecision ?? b?.usageLimit ?? 0,
       current: b?.currentUsageWithPrecision ?? b?.currentUsage ?? 0,
       ...(extra ? { extra } : {}),
+      sinceCheck: 0,
       checkedAt: new Date().toISOString(),
     };
     slot.account.quota = quota;

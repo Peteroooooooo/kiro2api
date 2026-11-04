@@ -302,15 +302,21 @@ describe('AccountPool quota refresh', () => {
     try {
       await pool.refreshQuota('a');
       pool.recordCredits('a', 3);
+      pool.recordCredits('a', 1.5);
       const view = pool.list()[0];
-      expect(view?.stats.credits).toBe(3);
+      expect(view?.stats.credits).toBe(4.5);
       expect(view?.quota?.current).toBe(49);
       expect(view?.quota?.extra?.current).toBe(0);
+      expect(view?.quota?.sinceCheck).toBe(4.5);
       expect(pool.aggregateQuota()).toMatchObject({
         limit: 50,
         current: 49,
         extra: { limit: 500, current: 0 },
+        sinceCheck: 4.5,
       });
+
+      await pool.refreshQuota('a');
+      expect(pool.list()[0]?.quota?.sinceCheck).toBe(0);
     } finally {
       spy.mockRestore();
     }
