@@ -103,11 +103,19 @@ export interface UsageBreakdown {
   usageLimitWithPrecision: number;
 }
 
-/** 奖励额度 */
+/**
+ * 奖励额度（实测 KIRO FREE，2026-11-05）：
+ * `{"bonusType":"FIRST_UPGRADE_TRIAL","displayName":"Trial credits","currentUsage":0,
+ *   "usageLimit":500,"status":"ACTIVE","redeemedAt":1793816788.305,"expiresAt":1825352760.678}`
+ * 时间戳是秒。和月度额度分开计，月度 `usageLimit` 用完后号仍可用。
+ */
 export interface Bonus {
   currentUsage: number;
   usageLimit: number;
   status?: string;
+  bonusType?: string;
+  displayName?: string;
+  expiresAt?: number;
 }
 
 /** 免费试用信息 */

@@ -23,9 +23,19 @@ export interface AccountStats {
   lastErrorAt?: string;
 }
 
-export interface AccountQuota {
+/** Credits granted on top of the monthly plan (bonuses, free trial), summed over the active ones. */
+export interface ExtraQuota {
   current: number;
   limit: number;
+  /** Earliest expiry among the active grants. */
+  expiresAt?: string;
+}
+
+export interface AccountQuota {
+  /** Monthly plan usage and limit only; `extra` is kept apart. */
+  current: number;
+  limit: number;
+  extra?: ExtraQuota;
   checkedAt: string;
 }
 
