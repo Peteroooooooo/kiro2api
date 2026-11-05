@@ -27,8 +27,10 @@ import {
   assertNever,
   classifyUpstreamErrorEvent,
   computeHasContent,
+  isThinkingOnlyCleanEnd,
   type PendingUpstreamError,
   streamReadError,
+  upstreamEndedAfterThinkingError,
 } from './stream.js';
 import { extractToolCallsFromCompleteText, type ToolTextRegistry } from './tool-call-text.js';
 import { parseCompletedToolInput, ToolUseSequence } from './tool-use-sequence.js';
@@ -53,6 +55,8 @@ export interface ReducedAttempt {
   kiroMetering: KiroMeteringData | undefined;
   /** 上游 mid-stream Error/Exception 帧(非 ContentLength);命中则 handler 明确报错 */
   upstreamError: PendingUpstreamError | undefined;
+  /** `metadataEvent.stopReason` 原值(只供日志) */
+  upstreamStopReason: string | undefined;
   /** 空响应(silent failure):无 text/tool/reasoning 且非确定性终止 */
   silentFailure: boolean;
   // 诊断
@@ -152,6 +156,8 @@ export function reduceKiroResponse(
   // 上游 mid-stream Error/Exception 帧(非 ContentLength)。命中 → drain 后明确
   // 报错(retryable→503 / fatal→502),而非静默返回部分内容或被误判成空流。
   let upstreamError: PendingUpstreamError | undefined;
+  /** `metadataEvent.stopReason` 原值,只进日志。 */
+  let upstreamStopReason: string | undefined;
   // 未识别 event-type(前向兼容诊断,进「完成」日志)
   const unknownEventTypes = new Set<string>();
 
@@ -304,6 +310,7 @@ export function reduceKiroResponse(
       case 'Metadata':
         // 只取「出现过」;stopReason 不可信(带工具时也报 END_TURN),见 base.ts 该 case。
         sawMetadata = true;
+        upstreamStopReason = event.stopReason;
         break;
 
       case 'Unknown':
@@ -391,6 +398,22 @@ export function reduceKiroResponse(
     thinkingExtracted: hasSurfaceableThinking,
     sawCompletedToolUse: toolUses.length > 0,
   });
+  if (
+    isThinkingOnlyCleanEnd({
+      sawMetadata,
+      thinkingExtracted: hasSurfaceableThinking,
+      sawVisibleText: textContent.trim() !== '',
+      sawAnyToolUse: announcedToolNames.size > 0 || toolUses.length > 0,
+      metered: kiroMetering !== undefined,
+      hasUpstreamError: upstreamError !== undefined,
+    })
+  ) {
+    log.warn({
+      msg: 'upstream ended after thinking with no output and no metering',
+      upstream_stop_reason: upstreamStopReason,
+    });
+    upstreamError = upstreamEndedAfterThinkingError(upstreamStopReason);
+  }
   if (stopReason === 'end_turn') {
     // ★ 截断的 tool_use 不能谎报 `tool_use`(与流式 `generateFinalEvents` 同源)。
     // 残缺调用在上面已被丢弃,报 tool_use 会让客户端等一个不存在的工具调用。
@@ -464,6 +487,7 @@ export function reduceKiroResponse(
     contextInputTokens,
     kiroMetering,
     upstreamError,
+    upstreamStopReason,
     silentFailure,
     eventCounts,
     announcedToolNames,
