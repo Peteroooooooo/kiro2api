@@ -13,7 +13,13 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { reduceKiroResponse } from '../../src/claude/non-stream-reduce.js';
-import { type SseEvent, StreamContext } from '../../src/claude/stream.js';
+import {
+  type SseEvent,
+  StreamContext,
+  UPSTREAM_ENDED_AFTER_THINKING_CODE,
+  UPSTREAM_ENDED_AFTER_THINKING_MESSAGE,
+  upstreamErrorWire,
+} from '../../src/claude/stream.js';
 import type { Event } from '../../src/kiro/model/events/base.js';
 import { HookBus } from '../../src/plugin-host/index.js';
 import { logger } from '../../src/shared/logger.js';
@@ -21,6 +27,8 @@ import {
   buildAssistantResponseFrame,
   buildErrorFrame,
   buildMetadataFrame,
+  buildMeteringFrame,
+  buildReasoningContentFrame,
   buildToolUseFrame,
 } from '../helpers/event-stream.js';
 
@@ -167,5 +175,77 @@ describe('非流式:终态判定与流式同源', () => {
     const r = reduce([]);
     expect(r.silentFailure).toBe(true);
     expect(r.stopReason).toBe('end_turn');
+  });
+});
+
+describe('只有思考就正常收尾(无文本 / 工具 / 计费)→ 明确报错,不伪装 max_tokens', () => {
+  const REASONING: Event = {
+    kind: 'ReasoningContent',
+    text: 'plan the edit',
+    signature: undefined,
+  };
+  const METERING: Event = { kind: 'Metering', unit: 'credit', unitPlural: 'credits', usage: 0.5 };
+  const METERING_DATA = { unit: 'credit', unitPlural: 'credits', usage: 0.5 };
+
+  function ended(events: Event[]): StreamContext {
+    const ctx = makeContext();
+    ctx.generateInitialEvents();
+    for (const event of events) ctx.processKiroEvent(event);
+    ctx.noteUpstreamStreamEnded();
+    return ctx;
+  }
+
+  it('流式:思考 + 尾帧、无计费 → 待发错误带专用提示,并记下上游 stopReason', async () => {
+    await withSpies(async ({ warn }) => {
+      const ctx = ended([
+        REASONING,
+        METADATA,
+        { kind: 'ContextUsage', contextUsagePercentage: 27 },
+      ]);
+      const err = ctx.getPendingUpstreamError();
+      expect(err?.code).toBe(UPSTREAM_ENDED_AFTER_THINKING_CODE);
+      expect(err?.retryable).toBe(false);
+      expect(err?.clientMessage).toBe(UPSTREAM_ENDED_AFTER_THINKING_MESSAGE);
+      expect(err?.message).toContain('END_TURN');
+      expect(ctx.upstreamStopReason).toBe('END_TURN');
+      expect(messagesOf(warn).some((m) => m.includes('ended after thinking'))).toBe(true);
+      expect(upstreamErrorWire(false, err?.clientMessage)).toEqual({
+        status: 502,
+        errorType: 'api_error',
+        message: UPSTREAM_ENDED_AFTER_THINKING_MESSAGE,
+      });
+    });
+  });
+
+  it('流式反向守卫:有计费 / 有文本 / 有工具 / 无尾帧,都不报这个错', async () => {
+    await withSpies(async () => {
+      expect(ended([REASONING, METADATA, METERING]).getPendingUpstreamError()).toBeUndefined();
+      expect(
+        ended([
+          REASONING,
+          { kind: 'AssistantResponse', content: 'answer' },
+          METADATA,
+        ]).getPendingUpstreamError(),
+      ).toBeUndefined();
+      expect(ended([REASONING, TOOL, METADATA]).getPendingUpstreamError()).toBeUndefined();
+      expect(ended([REASONING]).getPendingUpstreamError()).toBeUndefined();
+    });
+  });
+
+  it('非流式同源:思考 + 尾帧、无计费 → upstreamError;有计费仍是 max_tokens', async () => {
+    await withSpies(async () => {
+      const hit = reduce([buildReasoningContentFrame('plan the edit'), buildMetadataFrame()]);
+      expect(hit.upstreamError?.code).toBe(UPSTREAM_ENDED_AFTER_THINKING_CODE);
+      expect(hit.upstreamError?.clientMessage).toBe(UPSTREAM_ENDED_AFTER_THINKING_MESSAGE);
+      expect(hit.upstreamStopReason).toBe('END_TURN');
+
+      const billed = reduce([
+        buildReasoningContentFrame('plan the edit'),
+        buildMetadataFrame(),
+        buildMeteringFrame(METERING_DATA),
+      ]);
+      expect(billed.upstreamError).toBeUndefined();
+      expect(billed.stopReason).toBe('max_tokens');
+    });
   });
 });

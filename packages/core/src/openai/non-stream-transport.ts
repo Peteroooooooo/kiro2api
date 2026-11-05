@@ -134,7 +134,10 @@ export async function runOpenAiNonStream(
         });
         await hookBus.runUsageFinish(hookEvent);
       }
-      const { status, errorType, message } = upstreamErrorWire(reduced.upstreamError.retryable);
+      const { status, errorType, message } = upstreamErrorWire(
+        reduced.upstreamError.retryable,
+        reduced.upstreamError.clientMessage,
+      );
       noteRequestErrorDetail(`${reduced.upstreamError.code}: ${reduced.upstreamError.message}`);
       log.warn({
         msg: 'openai non-stream: mid-stream error frame, surfacing error',

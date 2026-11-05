@@ -280,6 +280,7 @@ export async function runOpenAiStream<E extends StreamEncoder>(
     } finally {
       draining = false;
     }
+    ctx.noteUpstreamStreamEnded();
 
     if (commitTimer) {
       clearTimeout(commitTimer);
@@ -341,7 +342,10 @@ export async function runOpenAiStream<E extends StreamEncoder>(
 
   const upstreamError = ctx.getPendingUpstreamError();
   if (upstreamError) {
-    const { status, errorType, message } = upstreamErrorWire(upstreamError.retryable);
+    const { status, errorType, message } = upstreamErrorWire(
+      upstreamError.retryable,
+      upstreamError.clientMessage,
+    );
     noteRequestError(errorType, message, `${upstreamError.code}: ${upstreamError.message}`);
     const closeEvents =
       committed || ctx.kiroMeteringRaw ? await ctx.generateFinalEvents(false) : [];

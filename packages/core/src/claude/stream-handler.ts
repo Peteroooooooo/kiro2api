@@ -420,6 +420,7 @@ export async function handleStreamRequest(
     } finally {
       draining = false;
     }
+    ctx.noteUpstreamStreamEnded();
 
     // Attempt's commit timer no longer needed.
     if (commitTimer) {
@@ -517,6 +518,7 @@ export async function handleStreamRequest(
     output_tokens: ctx.outputTokens,
     input_tokens: ctx.contextInputTokens ?? ctx.inputTokens,
     stop_reason: ctx.stateManager.getStopReason(),
+    upstream_stop_reason: ctx.upstreamStopReason,
     thinking_detected: ctx.thinkingExtracted,
     // kiro_metering + metering_lost,构造见 buildMeteringLogFields。这里只记本文件
     // 独有的一点:`metering_lost` 与紧邻的 drained_after_disconnect **口径不同**——
@@ -554,7 +556,10 @@ export async function handleStreamRequest(
     // Retryable (throttle/internal/unavailable) → 503/overloaded_error so the SDK
     // retries; fatal → 502/api_error hard-stop. Client message is neutral; the raw
     // code/message was already logged at the Error/Exception case (leak rule).
-    const { status, errorType, message } = upstreamErrorWire(upstreamError.retryable);
+    const { status, errorType, message } = upstreamErrorWire(
+      upstreamError.retryable,
+      upstreamError.clientMessage,
+    );
     noteRequestError(errorType, message, `${upstreamError.code}: ${upstreamError.message}`);
     // Redacted reasoning can consume credit without triggering commit. Preserve
     // any metering already received in that case, just as the non-stream path does.

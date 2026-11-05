@@ -124,6 +124,7 @@ export async function handleNonStreamRequest(
       opaqueReasoning,
       thinkingText,
       upstreamError,
+      upstreamStopReason,
       silentFailure,
       eventCounts,
       announcedToolNames,
@@ -178,7 +179,10 @@ export async function handleNonStreamRequest(
         });
         await hookBus.runUsageFinish(hookEvent);
       }
-      const { status, errorType, message } = upstreamErrorWire(upstreamError.retryable);
+      const { status, errorType, message } = upstreamErrorWire(
+        upstreamError.retryable,
+        upstreamError.clientMessage,
+      );
       noteRequestErrorDetail(`${upstreamError.code}: ${upstreamError.message}`);
       log.warn({
         msg: 'upstream sent mid-stream error frame (non-stream), surfacing error',
@@ -315,6 +319,7 @@ export async function handleNonStreamRequest(
     log.info({
       msg: 'non-stream completed',
       stop_reason: stopReason,
+      upstream_stop_reason: upstreamStopReason,
       input_tokens: finalInputTokens,
       output_tokens: outputTokens,
       tool_use_count: toolUses.length,

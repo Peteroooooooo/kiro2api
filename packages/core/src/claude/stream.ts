@@ -373,6 +373,55 @@ export interface PendingUpstreamError {
   retryable: boolean;
   /** Proven body corruption/read failure is never an empty-response retry. */
   bodyReadFailed: boolean;
+  /**
+   * Gateway-authored client message replacing the neutral default. Only for
+   * errors the gateway itself diagnosed; raw upstream text never goes here.
+   */
+  clientMessage?: string;
+}
+
+export const UPSTREAM_ENDED_AFTER_THINKING_CODE = 'UpstreamEndedAfterThinking';
+export const UPSTREAM_ENDED_AFTER_THINKING_MESSAGE =
+  'The upstream ended this response right after the thinking phase, with no text, ' +
+  'no tool call and no billing (likely stopped by an upstream filter). Continuing or ' +
+  'retrying the same conversation usually ends the same way; change the request or ' +
+  'start a new conversation.';
+
+/**
+ * 上游以 `metadataEvent` 正常收尾,却只给了思考:无可见文本、无工具调用(含残缺的)、
+ * 无计费帧、无错误帧。这与「说到一半 EOF」不同——上游自己宣告了结束,续写会把同一段
+ * 对话再发一遍、在同一处再次结束(线上同一会话 18/18 次)。故明确报错,不再伪装成
+ * `max_tokens`(Claude Code 会续写三次后报误导性的「超过 64000 output token」)。
+ * 流式与非流式共用这一个谓词。
+ */
+export function isThinkingOnlyCleanEnd(p: {
+  sawMetadata: boolean;
+  thinkingExtracted: boolean;
+  sawVisibleText: boolean;
+  sawAnyToolUse: boolean;
+  metered: boolean;
+  hasUpstreamError: boolean;
+}): boolean {
+  return (
+    p.sawMetadata &&
+    p.thinkingExtracted &&
+    !p.sawVisibleText &&
+    !p.sawAnyToolUse &&
+    !p.metered &&
+    !p.hasUpstreamError
+  );
+}
+
+export function upstreamEndedAfterThinkingError(
+  upstreamStopReason: string | undefined,
+): PendingUpstreamError {
+  return {
+    code: UPSTREAM_ENDED_AFTER_THINKING_CODE,
+    message: `metadata stopReason=${upstreamStopReason ?? 'none'}, no output, no metering`,
+    retryable: false,
+    bodyReadFailed: false,
+    clientMessage: UPSTREAM_ENDED_AFTER_THINKING_MESSAGE,
+  };
 }
 
 /** Shared classification for proven body-read/decode failures in both reducers. */
@@ -434,14 +483,18 @@ export function classifyUpstreamErrorEvent(
  * definition: a client can't tell — and needn't care — whether the shortage was
  * reported before or during generation.
  */
-export function upstreamErrorWire(retryable: boolean): {
+export function upstreamErrorWire(
+  retryable: boolean,
+  clientMessage?: string,
+): {
   status: number;
   errorType: string;
   message: string;
 } {
-  return retryable
+  const wire = retryable
     ? { status: 503, errorType: 'overloaded_error', message: RETRYABLE_UPSTREAM_ERROR_MESSAGE }
     : { status: 502, errorType: 'api_error', message: MIDSTREAM_UPSTREAM_ERROR_MESSAGE };
+  return clientMessage ? { ...wire, message: clientMessage } : wire;
 }
 
 /**
@@ -838,6 +891,8 @@ export class StreamContext {
    * 判空路径。
    */
   private sawMetadata = false;
+  /** `metadataEvent.stopReason` 原值,只进日志(不可信,不参与终态判定)。 */
+  upstreamStopReason: string | undefined;
   toolBlockIndices: Map<string, number>;
   toolNameMap: Map<string, string>;
   thinkingEnabled: boolean;
@@ -1137,6 +1192,7 @@ export class StreamContext {
         // 只取「出现过」;它的 stopReason 不可信(带工具时也报 END_TURN),终态
         // 由网关推断。错误路径也要吃到它:pendingUpstreamError 的过滤只拦内容帧。
         this.sawMetadata = true;
+        this.upstreamStopReason = event.stopReason;
         return [];
 
       case 'Unknown':
@@ -1518,6 +1574,27 @@ export class StreamContext {
    */
   hasIncompleteToolUse(): boolean {
     return this.pendingToolCalls.size > 0;
+  }
+
+  /**
+   * 读流结束后、终态判定前调用一次。命中 {@link isThinkingOnlyCleanEnd} 时记为待发
+   * 错误,走与显式错误帧相同的终结路径(重试循环视为确定性终止,终结段明确报错)。
+   */
+  noteUpstreamStreamEnded(): void {
+    const hit = isThinkingOnlyCleanEnd({
+      sawMetadata: this.sawMetadata,
+      thinkingExtracted: this.thinkingExtracted,
+      sawVisibleText: this.sawVisibleText,
+      sawAnyToolUse: this.seenToolUseNames.size > 0,
+      metered: this.kiroMeteringRaw !== undefined,
+      hasUpstreamError: this.pendingUpstreamError !== undefined,
+    });
+    if (!hit) return;
+    getLogger().warn({
+      msg: 'upstream ended after thinking with no output and no metering',
+      upstream_stop_reason: this.upstreamStopReason,
+    });
+    this.recordUpstreamError(upstreamEndedAfterThinkingError(this.upstreamStopReason));
   }
 
   /** Emit a tool block without touching legacy/native or rescue boundaries. */
