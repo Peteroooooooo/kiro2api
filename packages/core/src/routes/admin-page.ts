@@ -187,7 +187,6 @@ a { color: var(--accent); }
       </nav>
       <div class="stats" id="stats"></div>
       <div class="spacer"></div>
-      <button id="refreshAll">刷新全部额度</button>
       <button id="logout">退出</button>
     </header>
 
@@ -339,6 +338,7 @@ a { color: var(--accent); }
       <div class="panel-head">
         <h2>账号列表</h2>
         <div class="spacer"></div>
+        <button id="refreshAll">刷新全部额度</button>
         <button id="exportAll">导出全部</button>
       </div>
       <div class="table-wrap">
@@ -1070,7 +1070,6 @@ a { color: var(--accent); }
     $('logsView').classList.toggle('hidden', v !== 'logs');
     // visibility, not display: the header keeps its size, so nothing in it moves between views.
     $('stats').style.visibility = v === 'pool' ? '' : 'hidden';
-    $('refreshAll').style.visibility = v === 'pool' ? '' : 'hidden';
     try { history.replaceState(null, '', v === 'logs' ? '#logs' : location.pathname); } catch (e) {}
     if (v === 'logs') { lFacetsLoaded = false; loadLogs(); } else load();
   }
