@@ -151,7 +151,8 @@ CREATE INDEX IF NOT EXISTS requests_model_ts ON requests (model, ts);
 CREATE TABLE IF NOT EXISTS reasoning_tokens (
   key TEXT PRIMARY KEY,
   tokens INTEGER NOT NULL,
-  ts INTEGER NOT NULL
+  ts INTEGER NOT NULL,
+  context TEXT
 );
 CREATE INDEX IF NOT EXISTS reasoning_tokens_ts ON reasoning_tokens (ts);
 `;
@@ -310,6 +311,12 @@ export class RequestLogStore {
     );
     for (const [name, type] of ADDED_COLUMNS) {
       if (!have.has(name)) this.#db.exec(`ALTER TABLE requests ADD COLUMN ${name} ${type}`);
+    }
+    const reasoningColumns = (
+      this.#db.prepare('PRAGMA table_info(reasoning_tokens)').all() as { name: string }[]
+    ).map((c) => c.name);
+    if (!reasoningColumns.includes('context')) {
+      this.#db.exec('ALTER TABLE reasoning_tokens ADD COLUMN context TEXT');
     }
     this.#insert = this.#db.prepare(`
       INSERT INTO requests (
@@ -487,18 +494,25 @@ export class RequestLogStore {
     return this.#db.prepare('DELETE FROM requests WHERE ts < ?').run(cutoff).changes;
   }
 
-  /** Reasoning tokens billed behind a signature (keyed by its hash), see `kiro/prompt-tokens.ts`. */
-  getReasoningTokens(key: string): number | undefined {
-    const row = this.#db.prepare('SELECT tokens FROM reasoning_tokens WHERE key = ?').get(key) as
-      | { tokens: number }
-      | undefined;
-    return row ? Number(row.tokens) : undefined;
+  /**
+   * Reasoning tokens billed behind a signature (keyed by its hash) and the context it was issued
+   * in, see `kiro/prompt-tokens.ts`.
+   */
+  getReasoningTokens(key: string): { tokens: number; context?: string } | undefined {
+    const row = this.#db
+      .prepare('SELECT tokens, context FROM reasoning_tokens WHERE key = ?')
+      .get(key) as { tokens: number; context: string | null } | undefined;
+    if (!row) return undefined;
+    const tokens = Number(row.tokens);
+    return row.context ? { tokens, context: row.context } : { tokens };
   }
 
-  putReasoningTokens(key: string, tokens: number): void {
+  putReasoningTokens(key: string, record: { tokens: number; context?: string }): void {
     this.#db
-      .prepare('INSERT OR REPLACE INTO reasoning_tokens (key, tokens, ts) VALUES (?, ?, ?)')
-      .run(key, tokens, Date.now());
+      .prepare(
+        'INSERT OR REPLACE INTO reasoning_tokens (key, tokens, ts, context) VALUES (?, ?, ?, ?)',
+      )
+      .run(key, record.tokens, Date.now(), record.context ?? null);
   }
 
   close(): void {

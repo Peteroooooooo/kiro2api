@@ -47,7 +47,7 @@ export interface RequestContext {
    * Exact prompt tokens of the request the upstream accepted (`kiro/prompt-tokens.ts`); unset
    * for models whose framing is unmeasured.
    */
-  promptTokens?: { tokens: number; estimated: boolean };
+  promptTokens?: { tokens: number; estimated: boolean; context?: string };
 }
 
 export const requestContextStorage = new AsyncLocalStorage<RequestContext>();

@@ -309,7 +309,7 @@ async function main(): Promise<void> {
       );
       setReasoningTokenStore({
         get: (key) => store.getReasoningTokens(key),
-        put: (key, tokens) => store.putReasoningTokens(key, tokens),
+        put: (key, record) => store.putReasoningTokens(key, record),
       });
       requestLog = store;
       logger.info(`请求日志：${store.filePath}，保留 ${config.requestLogDays} 天`);

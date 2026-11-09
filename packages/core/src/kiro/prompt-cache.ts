@@ -5,12 +5,15 @@
  * (prompt + this turn's billed output) and bills credits. Two ways to split the prompt:
  *
  * - Exact (models in `kiro/prompt-tokens.ts`): the prompt is counted exactly, so the output is
- *   `context - prompt`, and with both known the credits fix the cached part:
- *   `credits = writePrice * (prompt - read) + readPrice * read + outputPrice * output`.
- *   Probes on claude-opus-5.5 (2026-11-09) gave read = 0.0 on cold prompts and prompt - read =
- *   13.3 tokens on identical resends; see PITFALLS「上游 prompt 缓存与本地记账」.
- * - Tracker (every other model, or no credits): the gateway keeps its own model of the upstream
- *   cache and takes the matched share of the prompt as read.
+ *   `context - prompt`, and with both known the credits fix the cached part. Kiro bills the
+ *   cheaper of two prices (probes on claude-opus-5.5, 2026-11-09):
+ *   `credits = output * outputPrice + min(read * readPrice + (prompt - read) * writePrice,
+ *   prompt * uncachedPrice)`. A request billed at the uncached price says nothing about its
+ *   cache (a cold prompt, or one that grew by more than ~30 %), so it falls back to the tracker.
+ *   A conversation extension reads the whole previous prompt except its last ~3 tokens; see
+ *   PITFALLS「上游 prompt 缓存与本地记账」.
+ * - Tracker (every other model, no credits, or billed uncached): the gateway keeps its own model
+ *   of the upstream cache and takes the matched share of the prompt as read.
  *
  * Tracker model, from probes on claude-opus-5.5 (2026-11-03/04):
  * - the cache belongs to the account and is keyed on content; for Claude conversationId does
@@ -18,13 +21,12 @@
  * - a later request hits the longest cached prefix that ends on a message boundary
  *   (tools, then each history message, then the current message);
  * - an entry lives ~5 minutes and is refreshed when it is read;
- * - everything not read is written (miss and write cost the same credits).
+ * - everything not read is written.
  *
  * Tracker token figures are only used as proportions of one prompt; the absolute prompt size
  * comes from the exact count or the upstream's context usage (see {@link localPromptSplit}).
  */
 
-import { createHash } from 'node:crypto';
 import type { UsageFinishEvent } from '@kiro2claude/plugin-api';
 import { isGptModelId } from '../claude/converter.js';
 import { getRequestContext } from '../shared/request-context.js';
@@ -33,6 +35,8 @@ import {
   countKiroPrompt,
   noteReasoningTokens,
   pinUnknownReasoning,
+  promptSegment,
+  segmentHashes,
   visibleOutputTokens,
 } from './prompt-tokens.js';
 
@@ -62,7 +66,7 @@ const SEGMENT_MEMO_MAX = 50_000;
 function tokensOf(value: unknown): number {
   let total = 0;
   const walk = (v: unknown, key?: string): void => {
-    // `i` = a user segment's images, see segmentOf.
+    // `i` = a user segment's images, see promptSegment in prompt-tokens.
     if (key === 'i' && Array.isArray(v)) {
       total += v.length * IMAGE_TOKENS;
     } else if (typeof v === 'string') {
@@ -76,28 +80,6 @@ function tokensOf(value: unknown): number {
   };
   walk(value);
   return total;
-}
-
-/**
- * What a message contributes to the prompt, independent of where it sits: the current user
- * message and the same message replayed as history next turn must hash alike (the wire
- * forms differ in `modelId` / `origin` / `tools`).
- */
-function segmentOf(message: Record<string, unknown>): unknown {
-  const user = message.userInputMessage as Record<string, unknown> | undefined;
-  if (user) {
-    const context = user.userInputMessageContext as Record<string, unknown> | undefined;
-    return { u: user.content ?? '', r: context?.toolResults ?? [], i: user.images ?? [] };
-  }
-  const assistant = message.assistantResponseMessage as Record<string, unknown> | undefined;
-  if (assistant) {
-    return {
-      a: assistant.content ?? '',
-      t: assistant.toolUses ?? [],
-      r: assistant.reasoningContent ?? null,
-    };
-  }
-  return message;
 }
 
 /** Cache boundaries of a Kiro request body, or undefined for bodies without a conversation. */
@@ -116,31 +98,27 @@ export function promptShapeOf(body: string): PromptShape | undefined {
     (current.userInputMessageContext as Record<string, unknown> | undefined)?.tools ?? [];
 
   const segments: unknown[] = [{ tools }];
-  for (const message of history) segments.push(segmentOf(message));
-  segments.push(segmentOf({ userInputMessage: current }));
+  for (const message of history) segments.push(promptSegment(message));
+  segments.push(promptSegment({ userInputMessage: current }));
 
-  const hashes: string[] = [];
+  const hashed = segmentHashes(segments);
   const tokens: number[] = [];
-  const running = createHash('sha1');
-  for (const segment of segments) {
-    const json = JSON.stringify(segment);
-    const segmentHash = createHash('sha1').update(json).digest('base64');
+  segments.forEach((segment, i) => {
+    const segmentHash = hashed.segments[i] as string;
     let count = segmentTokenMemo.get(segmentHash);
     if (count === undefined) {
       count = tokensOf(segment);
       if (segmentTokenMemo.size >= SEGMENT_MEMO_MAX) segmentTokenMemo.clear();
       segmentTokenMemo.set(segmentHash, count);
     }
-    running.update(segmentHash);
-    hashes.push(running.copy().digest('base64'));
     tokens.push(count);
-  }
+  });
   const model = typeof current.modelId === 'string' ? current.modelId : '';
   const conversation =
     isGptModelId(model) && typeof state?.conversationId === 'string'
       ? state.conversationId
       : undefined;
-  return { model, conversation, hashes, tokens };
+  return { model, conversation, hashes: hashed.prefixes, tokens };
 }
 
 /** Which prompt prefixes each account's upstream cache still holds. */
@@ -211,7 +189,7 @@ export function notePromptServed(accountId: string | undefined, body: string): v
   const count = countKiroPrompt(body);
   if (count) {
     pinUnknownReasoning(count.unknownReasoning);
-    ctx.promptTokens = { tokens: count.tokens, estimated: count.estimated };
+    ctx.promptTokens = { tokens: count.tokens, estimated: count.estimated, context: count.context };
   } else {
     ctx.promptTokens = undefined;
   }
@@ -236,21 +214,38 @@ export function resolveOutputTokens(args: {
   // Filed even when the prompt held estimates: the record then carries their error with the
   // opposite sign, and the next turn, replaying both, sums to the upstream's figure again.
   if (args.signatures.length > 0) {
-    noteReasoningTokens(args.signatures, output - visibleOutputTokens(args.text, args.toolUses));
+    noteReasoningTokens(
+      args.signatures,
+      output - visibleOutputTokens(args.text, args.toolUses),
+      prompt.context,
+    );
   }
   if (prompt.estimated || output < 0) return args.estimate;
   return output;
 }
 
-/** Kiro credits per token, measured with same-prompt resends (2026-11-09). */
-const CREDIT_PRICES: ReadonlyMap<string, { write: number; read: number; output: number }> = new Map(
-  [['claude-opus-5.5', { write: 1.227197e-5, read: 3.31675e-6, output: 2.210225561e-4 }]],
-);
+/**
+ * Kiro credits per token, measured with cold prompts, identical resends and conversation
+ * extensions (2026-11-09). `uncached` applies to the whole prompt when it is cheaper than the
+ * cached price (`read` for the cached part, `write` for the rest).
+ */
+const CREDIT_PRICES: ReadonlyMap<
+  string,
+  { uncached: number; read: number; write: number; output: number }
+> = new Map([
+  [
+    'claude-opus-5.5',
+    { uncached: 1.227197e-5, read: 3.319979e-6, write: 3.316302e-5, output: 2.210225561e-4 },
+  ],
+]);
 
 /** How far (tokens) the credit-implied read may fall outside [0, prompt] before it is distrusted. */
 const CREDIT_READ_SLACK = 64;
 
-/** Cache read implied by the credits, or undefined when they cannot be used. */
+/**
+ * Cache read implied by the credits, or undefined when they cannot be used: no credits or
+ * metering, or the prompt was billed at the uncached price (which hides the cache).
+ */
 function creditImpliedRead(
   event: UsageFinishEvent,
   prompt: number,
@@ -260,8 +255,10 @@ function creditImpliedRead(
   const price = CREDIT_PRICES.get(event.getMeta<string>('kiro.pricedModel') ?? '');
   if (!price || typeof credits !== 'number' || !(credits > 0)) return undefined;
   if (event.getMeta<boolean>('kiro.meteringMissing') === true) return undefined;
-  const read =
-    (price.write * prompt + price.output * output - credits) / (price.write - price.read);
+  const promptCredits = credits - price.output * output;
+  // Within a few output tokens' worth of the uncached price: billed uncached.
+  if (Math.abs(promptCredits - price.uncached * prompt) <= 4 * price.output) return undefined;
+  const read = (price.write * prompt - promptCredits) / (price.write - price.read);
   if (!Number.isFinite(read) || read < -CREDIT_READ_SLACK || read > prompt + CREDIT_READ_SLACK) {
     return undefined;
   }

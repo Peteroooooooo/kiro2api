@@ -30,6 +30,16 @@ interface Probe {
   wire: unknown;
   /** Reasoning tokens the issuing responses billed behind the signatures this wire replays. */
   replayed?: { signature: string; tokens: number }[];
+  /** Probes added for one test group below rather than the generic prompt check. */
+  group?: 'extension' | 'chain' | 'issue' | 'replay';
+  /** The upstream's prompt, from an identical resend's credits (when the response reasoned). */
+  promptTokens?: number;
+  /** Prompt of the request this one extends. */
+  previousPromptTokens?: number;
+  /** Probes whose responses issued the signatures this wire replays. */
+  issuedBy?: string[];
+  /** The response's tool calls (upstream names, parsed inputs). */
+  visibleToolUses?: { name: string; input: unknown }[];
 }
 
 const probes: Probe[] = JSON.parse(
@@ -50,7 +60,9 @@ function inContext<T>(ctx: RequestContext, fn: () => T): T {
 }
 
 describe('countKiroPrompt', () => {
-  const plain = probes.filter((p) => !p.signature && !p.name.startsWith('rp_') && !p.replayed);
+  const plain = probes.filter(
+    (p) => !p.signature && !p.name.startsWith('rp_') && !p.replayed && !p.group,
+  );
 
   it.each(
     plain.map((p) => [p.name, p] as const),
@@ -112,7 +124,7 @@ describe('countKiroPrompt', () => {
     expect(none?.estimated).toBe(false);
     expect(unknown?.estimated).toBe(true);
     expect(unknown?.tokens).toBe((none?.tokens ?? 0) + 200 + 2);
-    expect(unknown?.unknownReasoning).toEqual([{ signature: 'Q'.repeat(1300), tokens: 200 }]);
+    expect(unknown?.unknownReasoning).toMatchObject([{ signature: 'Q'.repeat(1300), tokens: 200 }]);
   });
 
   it('pins an unknown signature once served, so later turns count it the same way', () => {
@@ -139,6 +151,37 @@ describe('countKiroPrompt', () => {
     expect(countKiroPrompt(JSON.stringify(gpt))).toBeUndefined();
     expect(countKiroPrompt('not json')).toBeUndefined();
     expect(countKiroPrompt('{"profileArn":"x"}')).toBeUndefined();
+  });
+});
+
+describe('replayed reasoning', () => {
+  /** Files the reasoning a probe's response billed, in the context it was issued in. */
+  function issue(p: Probe): void {
+    const count = prompt(p);
+    const issuedPrompt = p.promptTokens ?? count?.tokens ?? 0;
+    noteReasoningTokens(
+      [p.signature ?? ''],
+      p.contextTokens - issuedPrompt - visibleOutputTokens(p.visibleText, p.visibleToolUses ?? []),
+      count?.context,
+    );
+  }
+
+  it('a real thinking chat stays exact turn after turn', () => {
+    const chain = probes.filter((p) => p.group === 'chain');
+    expect(chain.length).toBeGreaterThan(4);
+    for (const p of chain) {
+      expect(prompt(p)?.tokens, p.name).toBe(p.promptTokens);
+      if (p.signature) issue(p);
+    }
+  });
+
+  it.each(
+    probes.filter((p) => p.group === 'replay').map((p) => [p.name, p] as const),
+  )('%s', (_name, p) => {
+    for (const name of p.issuedBy ?? []) issue(probe(name));
+    const count = prompt(p);
+    expect(count?.estimated).toBe(false);
+    expect(count?.tokens).toBe(p.promptTokens);
   });
 });
 
@@ -218,16 +261,33 @@ describe('exact accounting', () => {
     });
   }
 
-  it('takes the cached part from the credits: cold prompt reads nothing', () => {
+  it('a cold prompt is billed at the uncached price, which hides the cache: tracker split', () => {
     const { output, prompt: p, split: s } = split(probe('tools3'));
     expect(output).toBe(4);
-    expect(s).toEqual({ inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: p, exact: true });
+    expect(s).toEqual({ inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: p, exact: false });
   });
 
-  it('an identical resend reads all but the 13-token uncached tail', () => {
+  it('an identical resend reads all but the last few tokens', () => {
     const { prompt: p, split: s } = split(probe('res_text_before'));
     expect(s?.exact).toBe(true);
-    expect(p - (s?.cacheReadTokens ?? 0)).toBe(13);
+    expect(p - (s?.cacheReadTokens ?? 0)).toBeGreaterThanOrEqual(0);
+    expect(p - (s?.cacheReadTokens ?? 0)).toBeLessThanOrEqual(4);
+  });
+
+  it.each([
+    'ext_small',
+    'ext_1400',
+  ])('%s: an extension reads the previous prompt but its last few tokens', (name) => {
+    const p = probe(name);
+    const { split: s } = split(p);
+    expect(s?.exact).toBe(true);
+    const unread = (p.previousPromptTokens ?? 0) - (s?.cacheReadTokens ?? 0);
+    expect(unread).toBeGreaterThanOrEqual(0);
+    expect(unread).toBeLessThanOrEqual(5);
+  });
+
+  it('an extension grown past ~30 % is billed uncached: tracker split', () => {
+    expect(split(probe('ext_uncached')).split?.exact).toBe(false);
   });
 
   it('falls back to the tracker without credits', () => {

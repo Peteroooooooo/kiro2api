@@ -41,10 +41,12 @@ const FRAME = {
   textAfterResults: 2,
   /** Each image, beyond its patches. */
   image: 3,
-  /** A replayed reasoning block in a text-only assistant message, beyond its reasoning tokens. */
+  /**
+   * A text-only assistant message that replays reasoning, or that has none but comes after a
+   * message with reasoning and not directly after tool results. Tool-call messages cost only
+   * their reasoning tokens.
+   */
   reasoning: 2,
-  /** Extra for such a block in an assistant message before the last one. */
-  olderReasoning: 2,
   /** End of every response. */
   outputEnd: 2,
   /** A response's tool calls, beyond their rendering. */
@@ -62,8 +64,59 @@ export interface KiroPromptCount {
   tokens: number;
   /** Part of the count is an estimate (unknown replayed reasoning or unreadable image). */
   estimated: boolean;
-  /** Replayed signatures the gateway had no record of, with the estimate used for each. */
-  unknownReasoning: { signature: string; tokens: number }[];
+  /**
+   * Replayed signatures the gateway had no record of, with the estimate used for each and the
+   * context they were replayed in.
+   */
+  unknownReasoning: { signature: string; tokens: number; context: string }[];
+  /** Hash of the whole prompt: the context a response to it is issued in. */
+  context: string;
+}
+
+// ---------------------------------------------------------------------------
+// Prompt segments
+// ---------------------------------------------------------------------------
+
+/**
+ * What a message contributes to the prompt, independent of where it sits: the current user
+ * message and the same message replayed as history next turn must hash alike (the wire forms
+ * differ in `modelId` / `origin` / `tools`).
+ */
+export function promptSegment(message: Record<string, unknown>): unknown {
+  const user = message.userInputMessage as Record<string, unknown> | undefined;
+  if (user) {
+    const context = user.userInputMessageContext as Record<string, unknown> | undefined;
+    return { u: user.content ?? '', r: context?.toolResults ?? [], i: user.images ?? [] };
+  }
+  const assistant = message.assistantResponseMessage as Record<string, unknown> | undefined;
+  if (assistant) {
+    return {
+      a: assistant.content ?? '',
+      t: assistant.toolUses ?? [],
+      r: assistant.reasoningContent ?? null,
+    };
+  }
+  return message;
+}
+
+/**
+ * Hashes of a prompt's segments (the tool list, then each message): `segments[i]` hashes segment
+ * i alone, `prefixes[i]` segments 0..i.
+ */
+export function segmentHashes(segments: readonly unknown[]): {
+  segments: string[];
+  prefixes: string[];
+} {
+  const single: string[] = [];
+  const prefixes: string[] = [];
+  const running = createHash('sha1');
+  for (const segment of segments) {
+    const hash = createHash('sha1').update(JSON.stringify(segment)).digest('base64');
+    single.push(hash);
+    running.update(hash);
+    prefixes.push(running.copy().digest('base64'));
+  }
+  return { segments: single, prefixes };
 }
 
 function contentTokens(text: string): number {
@@ -236,16 +289,26 @@ function imageTokens(image: unknown): { tokens: number; known: boolean } {
 // ---------------------------------------------------------------------------
 
 /**
- * Persistent backing for reasoning token counts (the request-log database), so replays after a
+ * Reasoning tokens a response billed behind its signature, and the context it was issued in
+ * (`KiroPromptCount.context` of that request). Undefined context: issued before contexts were
+ * recorded.
+ */
+export interface ReasoningRecord {
+  tokens: number;
+  context?: string;
+}
+
+/**
+ * Persistent backing for reasoning records (the request-log database), so replays after a
  * restart still count exactly. Optional: without it only the in-memory map is used.
  */
 export interface ReasoningTokenStore {
-  get(key: string): number | undefined;
-  put(key: string, tokens: number): void;
+  get(key: string): ReasoningRecord | undefined;
+  put(key: string, record: ReasoningRecord): void;
 }
 
 let reasoningStore: ReasoningTokenStore | undefined;
-const reasoningMemo = new Map<string, number>();
+const reasoningMemo = new Map<string, ReasoningRecord>();
 const REASONING_MEMO_MAX = 20_000;
 
 export function setReasoningTokenStore(store: ReasoningTokenStore | undefined): void {
@@ -256,12 +319,12 @@ function reasoningKey(signature: string): string {
   return createHash('sha256').update(signature).digest('base64url').slice(0, 22);
 }
 
-function rememberReasoning(key: string, tokens: number): void {
+function rememberReasoning(key: string, record: ReasoningRecord): void {
   if (reasoningMemo.size >= REASONING_MEMO_MAX) {
     const oldest = reasoningMemo.keys().next().value;
     if (oldest !== undefined) reasoningMemo.delete(oldest);
   }
-  reasoningMemo.set(key, tokens);
+  reasoningMemo.set(key, record);
 }
 
 /**
@@ -273,13 +336,18 @@ function rememberReasoning(key: string, tokens: number): void {
  * held estimated (pinned) signatures: it then carries their error with the opposite sign, so a
  * later prompt replaying all of them sums to the upstream's figure again. It can be negative.
  */
-export function noteReasoningTokens(signatures: readonly string[], tokens: number): void {
+export function noteReasoningTokens(
+  signatures: readonly string[],
+  tokens: number,
+  context?: string,
+): void {
   for (const signature of signatures) {
     if (!signature) continue;
     const key = reasoningKey(signature);
-    rememberReasoning(key, tokens);
+    const record: ReasoningRecord = context === undefined ? { tokens } : { tokens, context };
+    rememberReasoning(key, record);
     try {
-      reasoningStore?.put(key, tokens);
+      reasoningStore?.put(key, record);
     } catch {
       // The count stays in memory; persistence is best effort.
     }
@@ -287,31 +355,36 @@ export function noteReasoningTokens(signatures: readonly string[], tokens: numbe
 }
 
 /**
- * Fixes each unknown replayed signature at the estimate this request used, so every later
- * request counts it the same way (see `noteReasoningTokens`).
+ * Fixes each unknown replayed signature at the estimate this request used, in the context it
+ * was replayed in, so every later request counts it the same way (see `noteReasoningTokens`).
  */
 export function pinUnknownReasoning(
-  unknown: readonly { signature: string; tokens: number }[],
+  unknown: readonly { signature: string; tokens: number; context: string }[],
 ): void {
-  for (const { signature, tokens } of unknown) noteReasoningTokens([signature], tokens);
+  for (const { signature, tokens, context } of unknown) {
+    noteReasoningTokens([signature], tokens, context);
+  }
 }
 
-/** Reasoning tokens behind a replayed signature, measured when it was issued, else estimated. */
-function replayedReasoningTokens(signature: string): { tokens: number; known: boolean } {
+function reasoningRecord(signature: string): ReasoningRecord | undefined {
   const key = reasoningKey(signature);
-  let tokens = reasoningMemo.get(key);
-  if (tokens === undefined) {
+  let record = reasoningMemo.get(key);
+  if (record === undefined) {
     try {
-      tokens = reasoningStore?.get(key);
+      record = reasoningStore?.get(key);
     } catch {
-      tokens = undefined;
+      record = undefined;
     }
-    if (tokens !== undefined) rememberReasoning(key, tokens);
+    if (record !== undefined) rememberReasoning(key, record);
   }
-  if (tokens !== undefined) return { tokens, known: true };
+  return record;
+}
+
+/** Estimate for a signature without a record. */
+function estimatedReasoningTokens(signature: string): number {
   // Measured 2026-11-09: signatures of 680 / 856 / 1724 / 130496 characters carried
   // 19 / 96 / 350 / 37951 reasoning tokens.
-  return { tokens: Math.max(0, Math.round((signature.length - 620) / 3.4)), known: false };
+  return Math.max(0, Math.round((signature.length - 620) / 3.4));
 }
 
 // ---------------------------------------------------------------------------
@@ -353,16 +426,19 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
   if (!current || !EXACT_PROMPT_MODELS.has(String(current.modelId ?? ''))) return undefined;
   const history = Array.isArray(state?.history) ? (state.history as Json[]) : [];
   const messages: Json[] = [...history, { userInputMessage: current }];
+  const currentContext = (current.userInputMessageContext ?? {}) as Json;
+  // Message i's context (the tool list and every message before it) is prefixes[i].
+  const { prefixes } = segmentHashes([
+    { tools: currentContext.tools ?? [] },
+    ...messages.map(promptSegment),
+  ]);
 
   let tokens = FRAME.base + FRAME.historyMessage * history.length;
   let estimated = false;
-  const unknownReasoning: { signature: string; tokens: number }[] = [];
+  const unknownReasoning: KiroPromptCount['unknownReasoning'] = [];
   const callNames = new Map<string, string>();
   let previousHadResults = false;
-  let lastAssistant = -1;
-  messages.forEach((m, i) => {
-    if (m.assistantResponseMessage) lastAssistant = i;
-  });
+  let reasoningSeen = false;
 
   messages.forEach((message, index) => {
     const assistant = message.assistantResponseMessage as Json | undefined;
@@ -387,18 +463,30 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
         | { reasoningText?: { signature?: unknown } }
         | undefined;
       const signature = reasoning?.reasoningText?.signature;
+      const messageContext = prefixes[index] as string;
+      let replayed = false;
+      let dropped = false;
       if (typeof signature === 'string' && signature) {
-        const replay = replayedReasoningTokens(signature);
-        tokens += replay.tokens;
-        // Next to tool calls the block costs only its reasoning (measured on a real tool loop).
-        if (!toolUses.length) {
-          tokens += FRAME.reasoning + (index < lastAssistant ? FRAME.olderReasoning : 0);
-        }
-        if (!replay.known) {
+        const record = reasoningRecord(signature);
+        if (record === undefined) {
+          const guess = estimatedReasoningTokens(signature);
+          tokens += guess;
+          replayed = true;
           estimated = true;
-          unknownReasoning.push({ signature, tokens: replay.tokens });
+          unknownReasoning.push({ signature, tokens: guess, context: messageContext });
+        } else if (record.context !== undefined && record.context !== messageContext) {
+          // A signature replayed in another context than it was issued in (an earlier message
+          // or the tool list changed) is ignored upstream: no reasoning, no framing.
+          dropped = true;
+        } else {
+          tokens += record.tokens;
+          replayed = true;
         }
       }
+      if (!toolUses.length && !dropped && (replayed || (reasoningSeen && !previousHadResults))) {
+        tokens += FRAME.reasoning;
+      }
+      if (replayed) reasoningSeen = true;
       previousHadResults = false;
       return;
     }
@@ -439,7 +527,7 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
     previousHadResults = results.length > 0;
   });
 
-  return { tokens, estimated, unknownReasoning };
+  return { tokens, estimated, unknownReasoning, context: prefixes.at(-1) as string };
 }
 
 /**
