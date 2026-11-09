@@ -269,9 +269,9 @@ function rememberReasoning(key: string, tokens: number): void {
  * replays them. Signatures arrive one per reasoning block; all of a response's reasoning is
  * filed under each, since the converter replays at most one block per assistant message.
  *
- * The count is `output - visible output` unclamped: after a prompt that held an estimated
- * (pinned) signature it carries that estimate's error with the opposite sign, so a later prompt
- * replaying both signatures sums to the upstream's figure again. It can therefore be negative.
+ * The count is `context - prompt - visible output`, unclamped and filed even when the prompt
+ * held estimated (pinned) signatures: it then carries their error with the opposite sign, so a
+ * later prompt replaying all of them sums to the upstream's figure again. It can be negative.
  */
 export function noteReasoningTokens(signatures: readonly string[], tokens: number): void {
   for (const signature of signatures) {

@@ -233,10 +233,12 @@ export function resolveOutputTokens(args: {
   const prompt = getRequestContext()?.promptTokens;
   if (!prompt || !args.fromUpstream) return args.estimate;
   const output = args.contextTokens - prompt.tokens;
-  if (output < 0) return args.estimate;
+  // Filed even when the prompt held estimates: the record then carries their error with the
+  // opposite sign, and the next turn, replaying both, sums to the upstream's figure again.
   if (args.signatures.length > 0) {
     noteReasoningTokens(args.signatures, output - visibleOutputTokens(args.text, args.toolUses));
   }
+  if (prompt.estimated || output < 0) return args.estimate;
   return output;
 }
 

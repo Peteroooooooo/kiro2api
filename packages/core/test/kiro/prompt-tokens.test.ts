@@ -248,6 +248,42 @@ describe('exact accounting', () => {
     expect((s?.cacheReadTokens ?? 0) + (s?.cacheWriteTokens ?? 0)).toBe(p.contextTokens - 4);
   });
 
+  it('heals a chain that started with estimated signatures', () => {
+    const ctx: RequestContext = {
+      reqId: 'r',
+      startTime: 0,
+      promptTokens: { tokens: 1_000, estimated: true },
+    };
+    const out = inContext(ctx, () =>
+      resolveOutputTokens({
+        contextTokens: 980,
+        fromUpstream: true,
+        estimate: 7,
+        text: '',
+        toolUses: [],
+        signatures: ['heal-sig'],
+      }),
+    );
+    expect(out).toBe(7);
+    const later = countKiroPrompt(
+      JSON.stringify({
+        conversationState: {
+          history: [
+            { userInputMessage: { content: 'q', modelId: 'claude-opus-5.5' } },
+            {
+              assistantResponseMessage: {
+                content: 'a',
+                reasoningContent: { reasoningText: { text: '', signature: 'heal-sig' } },
+              },
+            },
+          ],
+          currentMessage: { userInputMessage: { content: 'q', modelId: 'claude-opus-5.5' } },
+        },
+      }),
+    );
+    expect(later?.estimated).toBe(false);
+  });
+
   it('keeps the estimate when the context is not from the upstream', () => {
     const ctx: RequestContext = {
       reqId: 'r',
