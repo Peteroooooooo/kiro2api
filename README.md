@@ -141,3 +141,5 @@ pnpm --filter @kiro2claude/core test
 ## 协议
 
 MIT。原项目版权归 yupanzi，见 [LICENSE](LICENSE)。
+
+本地 Claude token 计数（`packages/core/src/tokenizer/claude/`）移植自 [sanderland/ctok](https://github.com/sanderland/ctok)（MIT，Copyright (c) 2026 Sander Land），许可文本见该目录下的 LICENSE。

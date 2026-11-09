@@ -928,7 +928,7 @@ a { color: var(--accent); }
     var tokens = [l.inputTokens == null ? null : promptOf(l), l.cacheReadTokens, l.cacheWriteTokens, l.outputTokens].map(function (n) {
       return n == null ? '-' : n.toLocaleString();
     }).join(' / ');
-    var source = { local: '网关本地记账', derived: '按 credits 反推（旧记录）', raw: '未拆分（整段算输入）' }[l.accounting || 'derived'];
+    var source = { exact: '精确计数（输出 = 上下文 − 精确 prompt，缓存按 credits 拆）', local: '网关本地记账（缓存按本地模型估）', derived: '按 credits 反推（旧记录）', raw: '未拆分（整段算输入）' }[l.accounting || 'derived'];
     var kv = [
       ['请求 ID', '<span class="mono">' + esc(l.reqId) + '</span>'],
       ['时间', dfFull.format(l.ts)],
@@ -963,7 +963,7 @@ a { color: var(--accent); }
     if (!lItems.length) { $('lRows').innerHTML = '<tr><td colspan="12" class="empty">没有符合条件的请求</td></tr>'; return; }
     $('lRows').innerHTML = lItems.map(function (l) {
       var sub = [protoOf(l.path), l.stream ? '流式' : '非流式', reasoningOf(l)].filter(Boolean).join(' · ');
-      var est = l.accounting === 'local' ? '' : ' est';
+      var est = l.accounting === 'exact' || l.accounting === 'local' ? '' : ' est';
       var row = '<tr class="r' + (lOpenId === l.id ? ' open' : '') + '" data-id="' + l.id + '">'
         + '<td>' + fmtLogTime(l.ts) + '</td>'
         + '<td>' + esc(l.accountName || '-') + '</td>'

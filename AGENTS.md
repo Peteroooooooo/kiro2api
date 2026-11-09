@@ -75,6 +75,7 @@ openai/                 OpenAI 兼容层:语义核心复用 claude,只做协议�
 | 上游 wire(kiro-cli V3 / KAS)/ fixture 升版本 | `fixtures/kiro-cli-profile.json`(`kas` / `shell` 两个身份)+ `kiro/client-profile.ts`;抓包 `scripts/capture-kiro-cli.sh` → commit `fixtures/`;版本号由 `.releaserc.json` 从 fixture 派生 |
 | 重试头 | `applyRetryHeaders`(`kiro/retry-executor.ts`)唯一 owner;见 PITFALLS「重试头」;守卫 `test/kiro/retry-headers.test.ts` |
 | plugin 注入 `usage` / `kiro.*` meta 键 | `event.addExtension` / `overrideStandardField`;meta 键 = `buildKiroUsageFinishEvent` + `plugin-api/src/types.ts` `getMeta` + PLUGIN-DEVELOPMENT「Meta 键」,**加键同改三处**,守卫 `test/static/usage-meta-contract.test.ts` |
+| token 记账(输入 / 输出 / 缓存读写) | `kiro/prompt-tokens.ts`(opus-5.5 的精确 prompt 计数 + 实测框架常数)、`kiro/prompt-cache.ts`(输出 = T − prompt、按 credits 拆缓存、其它模型的本地缓存模型);分词器 `tokenizer/claude/`(ctok 移植);见 PITFALLS「上游 prompt 缓存与本地记账」 |
 | 上游已扣费但没记账 | `isMeteringLost`(`claude/stream.ts`),估规模前读其头注释的口径偏差 |
 | 上游「说完了」还是「说到一半」 | `metadataEvent` 出现过 = 唯一信号(`kiro/model/events/base.ts`);**别用它的 `stopReason`** |
 | 流里有没有真实内容 / tool_use 没发完 | `computeHasContent`(`claude/stream.ts`);`StreamContext.hasIncompleteToolUse()`,别退回 `stop_reason === 'tool_use'` |

@@ -263,7 +263,7 @@ export class RetryExecutor {
     // credential) moves the request to another account. Everything here happens
     // before a stream starts, so the client never sees the failed attempts.
     while (true) {
-      const used: { ctx?: CallContext } = {};
+      const used: { ctx?: CallContext; body?: string } = {};
       try {
         const response = await this.executeOnAccount(
           req,
@@ -271,7 +271,7 @@ export class RetryExecutor {
           used,
         );
         this.tokenManager.reportOutcome(used.ctx?.accountId, { kind: 'success', model });
-        notePromptServed(used.ctx?.accountId, req.body);
+        notePromptServed(used.ctx?.accountId, used.body ?? req.body);
         if (throttled > 0) {
           getLogger().info({
             msg: 'throttle retry succeeded on the same account',
@@ -325,7 +325,7 @@ export class RetryExecutor {
   private async executeOnAccount(
     req: RetryableRequest,
     opts: AcquireOptions,
-    used: { ctx?: CallContext },
+    used: { ctx?: CallContext; body?: string },
   ): Promise<AxiosResponse> {
     const log = getLogger();
     let forceRefreshed = false;
@@ -370,6 +370,7 @@ export class RetryExecutor {
       const status = response.status;
 
       if (status >= 200 && status < 300) {
+        used.body = req.body;
         log.info({
           msg: 'Kiro API call succeeded',
           type: req.label,

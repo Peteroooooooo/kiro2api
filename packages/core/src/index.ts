@@ -21,6 +21,7 @@ import { runStartupAutoCapture } from './kiro/auto-capture.js';
 import { runBootstrapLogin } from './kiro/bootstrap-login.js';
 import { verifyInstalledKiroCliVersion } from './kiro/cli-version.js';
 import { loadCredentialsFromEnv } from './kiro/credentials-loader.js';
+import { setReasoningTokenStore } from './kiro/prompt-tokens.js';
 import { KiroProvider } from './kiro/provider.js';
 import { SingleTokenManager } from './kiro/token-manager.js';
 import type { TokenSource } from './kiro/token-source.js';
@@ -306,6 +307,10 @@ async function main(): Promise<void> {
       setRequestLogSink((draft) =>
         store.insert(entryFromDraft(draft, (id) => accountPool.nameOf(id))),
       );
+      setReasoningTokenStore({
+        get: (key) => store.getReasoningTokens(key),
+        put: (key, tokens) => store.putReasoningTokens(key, tokens),
+      });
       requestLog = store;
       logger.info(`请求日志：${store.filePath}，保留 ${config.requestLogDays} 天`);
     } catch (e) {

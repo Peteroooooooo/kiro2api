@@ -173,11 +173,13 @@ describe('localPromptSplit', () => {
       inputTokens: 0,
       cacheReadTokens: 300,
       cacheWriteTokens: 700,
+      exact: false,
     });
     expect(inContext({ promptCache }, () => localPromptSplit(event(1_000, 100, false)))).toEqual({
       inputTokens: 0,
       cacheReadTokens: 300,
       cacheWriteTokens: 700,
+      exact: false,
     });
   });
 
@@ -189,10 +191,25 @@ describe('localPromptSplit', () => {
   it('estimatedPromptSplit cuts the request estimate by the same share, input 0', () => {
     const at = (read: number, total: number) =>
       inContext({ promptCache: { read, total } }, () => estimatedPromptSplit(1_000));
-    expect(at(30, 100)).toEqual({ inputTokens: 0, cacheReadTokens: 300, cacheWriteTokens: 700 });
+    expect(at(30, 100)).toEqual({
+      inputTokens: 0,
+      cacheReadTokens: 300,
+      cacheWriteTokens: 700,
+      exact: false,
+    });
     // zero in the final split ⇔ zero here (Claude Code keeps message_start values over zero deltas)
-    expect(at(0, 100)).toEqual({ inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 1_000 });
-    expect(at(100, 100)).toEqual({ inputTokens: 0, cacheReadTokens: 1_000, cacheWriteTokens: 0 });
+    expect(at(0, 100)).toEqual({
+      inputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 1_000,
+      exact: false,
+    });
+    expect(at(100, 100)).toEqual({
+      inputTokens: 0,
+      cacheReadTokens: 1_000,
+      cacheWriteTokens: 0,
+      exact: false,
+    });
     expect(inContext({}, () => estimatedPromptSplit(1_000))).toBeUndefined();
   });
 

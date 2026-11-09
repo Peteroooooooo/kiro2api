@@ -5,8 +5,8 @@ import type { RequestLogUsage } from '../shared/request-log.js';
 
 /**
  * Token breakdown for the request log, read after every plugin hook has run (the hook is
- * registered last). The gateway's own count (`localPromptSplit`) wins: it is what the log
- * is for. Without it (the request never got an upstream success) plugin overrides, then
+ * registered last). The gateway's own count (`localPromptSplit`, exact or tracker-based) wins:
+ * it is what the log is for. Without it (the request never got an upstream success) plugin overrides, then
  * the raw upstream count as input with no cache split, stand in.
  */
 export function requestLogUsage(event: UsageFinishEvent): RequestLogUsage {
@@ -19,7 +19,10 @@ export function requestLogUsage(event: UsageFinishEvent): RequestLogUsage {
     meteringLost: event.getMeta<boolean>('kiro.meteringMissing') === true,
   };
   const local = localPromptSplit(event);
-  if (local) return { ...local, ...common, accounting: 'local' };
+  if (local) {
+    const { exact, ...split } = local;
+    return { ...split, ...common, accounting: exact ? 'exact' : 'local' };
+  }
 
   const overrides = event instanceof UsageFinishEventImpl ? event.getOverrides() : undefined;
   return {

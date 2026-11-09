@@ -43,6 +43,11 @@ export interface RequestContext {
    * the ratio is used.
    */
   promptCache?: { read: number; total: number };
+  /**
+   * Exact prompt tokens of the request the upstream accepted (`kiro/prompt-tokens.ts`); unset
+   * for models whose framing is unmeasured.
+   */
+  promptTokens?: { tokens: number; estimated: boolean };
 }
 
 export const requestContextStorage = new AsyncLocalStorage<RequestContext>();

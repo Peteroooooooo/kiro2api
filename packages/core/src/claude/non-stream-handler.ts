@@ -13,6 +13,7 @@
 import type { AxiosResponse } from 'axios';
 import type { FastifyReply } from 'fastify';
 import { v4 as uuidv4 } from 'uuid';
+import { resolveOutputTokens } from '../kiro/prompt-cache.js';
 import type { KiroProvider } from '../kiro/provider.js';
 import type { HookBus } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
@@ -279,11 +280,17 @@ export async function handleNonStreamRequest(
     const opaqueBlock = opaqueReasoning ? redactedThinkingBlock(opaqueReasoning, model) : undefined;
     if (opaqueBlock) content.push(opaqueBlock);
 
-    // Estimate output tokens
-    const outputTokens = estimateOutputTokens(content);
-
     // Use contextUsageEvent input_tokens if available
     const finalInputTokens = contextInputTokens ?? inputTokens;
+
+    const outputTokens = resolveOutputTokens({
+      contextTokens: finalInputTokens,
+      fromUpstream: contextInputTokens !== undefined,
+      estimate: estimateOutputTokens(content),
+      text: textContent,
+      toolUses: toolUses.map((t) => ({ name: String(t.name ?? ''), input: t.input })),
+      signatures: reasoningSignature ? [reasoningSignature] : [],
+    });
 
     // Run hook bus so plugins can shape wire usage
     const hookEvent = buildKiroUsageFinishEvent({

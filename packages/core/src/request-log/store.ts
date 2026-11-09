@@ -41,7 +41,7 @@ export interface RequestLogEntry {
   /** Ms waited inside the gateway for throttle holds (0 when absent). */
   throttleWaitMs?: number;
   /** Source of the input / cache split, see `RequestLogUsage.accounting`; unset on rows before it was recorded. */
-  accounting?: 'local' | 'derived' | 'raw';
+  accounting?: 'exact' | 'local' | 'derived' | 'raw';
   errorType?: string;
   errorMessage?: string;
   errorDetail?: string;
@@ -148,6 +148,12 @@ CREATE TABLE IF NOT EXISTS requests (
 CREATE INDEX IF NOT EXISTS requests_ts ON requests (ts);
 CREATE INDEX IF NOT EXISTS requests_account_ts ON requests (account_id, ts);
 CREATE INDEX IF NOT EXISTS requests_model_ts ON requests (model, ts);
+CREATE TABLE IF NOT EXISTS reasoning_tokens (
+  key TEXT PRIMARY KEY,
+  tokens INTEGER NOT NULL,
+  ts INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reasoning_tokens_ts ON reasoning_tokens (ts);
 `;
 
 /** Columns added after the first release; `CREATE TABLE IF NOT EXISTS` does not add them to an old table. */
@@ -190,7 +196,7 @@ function tokenSums(r: Row) {
 }
 
 function accountingOf(v: unknown): RequestLogEntry['accounting'] {
-  return v === 'local' || v === 'derived' || v === 'raw' ? v : undefined;
+  return v === 'exact' || v === 'local' || v === 'derived' || v === 'raw' ? v : undefined;
 }
 
 type Row = Record<string, unknown>;
@@ -387,7 +393,7 @@ export class RequestLogStore {
           AVG(CASE WHEN ${FAILED_SQL} THEN NULL ELSE context_tokens END) AS avg_context_tokens,
           COALESCE(SUM(CASE WHEN ${COLD_SQL} THEN 1 ELSE 0 END), 0) AS cold_requests,
           COALESCE(SUM(CASE WHEN ${COLD_SQL} THEN credits ELSE 0 END), 0) AS cold_credits,
-          COALESCE(SUM(CASE WHEN accounting = 'local' THEN 1 ELSE 0 END), 0) AS local_rows
+          COALESCE(SUM(CASE WHEN accounting IN ('exact', 'local') THEN 1 ELSE 0 END), 0) AS local_rows
         FROM requests ${w.sql}`)
       .get(...w.params) as Row;
     return {
@@ -475,9 +481,24 @@ export class RequestLogStore {
     return named;
   }
 
-  /** Delete rows that started before `cutoff`; returns the number removed. */
+  /** Delete rows that started before `cutoff`; returns the number of request rows removed. */
   prune(cutoff: number): number {
+    this.#db.prepare('DELETE FROM reasoning_tokens WHERE ts < ?').run(cutoff);
     return this.#db.prepare('DELETE FROM requests WHERE ts < ?').run(cutoff).changes;
+  }
+
+  /** Reasoning tokens billed behind a signature (keyed by its hash), see `kiro/prompt-tokens.ts`. */
+  getReasoningTokens(key: string): number | undefined {
+    const row = this.#db.prepare('SELECT tokens FROM reasoning_tokens WHERE key = ?').get(key) as
+      | { tokens: number }
+      | undefined;
+    return row ? Number(row.tokens) : undefined;
+  }
+
+  putReasoningTokens(key: string, tokens: number): void {
+    this.#db
+      .prepare('INSERT OR REPLACE INTO reasoning_tokens (key, tokens, ts) VALUES (?, ?, ?)')
+      .run(key, tokens, Date.now());
   }
 
   close(): void {

@@ -26,11 +26,12 @@ export interface RequestLogUsage {
   credits?: number;
   meteringLost: boolean;
   /**
-   * Where the input / cache split came from: the gateway's own cache model (`local`), the
-   * derived plugin's credit inversion (`derived`, also every row logged before local
-   * accounting), or neither (`raw`: whole context as input).
+   * Where the input / cache split came from: exact prompt count with the split fixed by the
+   * credits (`exact`), the gateway's own cache model (`local`), the derived plugin's credit
+   * inversion (`derived`, also every row logged before local accounting), or neither (`raw`:
+   * whole context as input).
    */
-  accounting?: 'local' | 'derived' | 'raw';
+  accounting?: 'exact' | 'local' | 'derived' | 'raw';
 }
 
 export interface RequestLogDraft {

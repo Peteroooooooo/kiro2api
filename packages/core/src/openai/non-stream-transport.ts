@@ -25,6 +25,7 @@ import {
   upstreamErrorWire,
 } from '../claude/stream.js';
 import type { ToolTextRegistry } from '../claude/tool-call-text.js';
+import { resolveOutputTokens } from '../kiro/prompt-cache.js';
 import type { KiroProvider } from '../kiro/provider.js';
 import type { HookBus } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
@@ -169,7 +170,14 @@ export async function runOpenAiNonStream(
       return { emptyResponse: true, emptyAttempts };
     }
 
-    const outputTokens = estimateOutputTokens(contentForEstimate(reduced));
+    const outputTokens = resolveOutputTokens({
+      contextTokens: finalInputTokens,
+      fromUpstream: reduced.contextInputTokens !== undefined,
+      estimate: estimateOutputTokens(contentForEstimate(reduced)),
+      text: reduced.textContent,
+      toolUses: reduced.toolUses.map((t) => ({ name: String(t.name ?? ''), input: t.input })),
+      signatures: reduced.reasoningSignature ? [reduced.reasoningSignature] : [],
+    });
 
     const hookEvent = buildKiroUsageFinishEvent({
       model,

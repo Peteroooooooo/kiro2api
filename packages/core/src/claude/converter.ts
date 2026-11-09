@@ -488,7 +488,8 @@ export function resolveContextUsage(
 ): { inputTokens: number; exceeded: boolean } {
   const windowSize = getContextWindowSize(model);
   return {
-    inputTokens: Math.floor((contextUsagePercentage * windowSize) / 100.0),
+    // The percentage carries float error; flooring it drops one token on many requests.
+    inputTokens: Math.round((contextUsagePercentage * windowSize) / 100.0),
     exceeded: contextUsagePercentage >= 100.0,
   };
 }

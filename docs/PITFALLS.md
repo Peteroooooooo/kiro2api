@@ -312,6 +312,16 @@ KAS 形态:assistant 侧 `{content, toolUses:[{toolUseId,name,input}], reasoning
 
 **Claude Code 的 ToolSearch 会让整段缓存失效**:延迟加载的工具(多数 MCP 工具)一开始只给名字,模型调用 ToolSearch 加载后,下一次请求的工具列表多出这个工具。上游的缓存前缀从工具列表开始,所以这一轮整段重新写入(实测 14–25 万 token 一次,约多花 1.8 credits)。网关没法在不破坏工具调用的前提下保持工具列表不变;关掉延迟加载会让每轮都带上全部工具说明,估算更贵。目前接受。
 
+**精确记账(2026-11-09 起,claude-opus-5.5)**:上面的估算只留给其它模型。opus-5.5 改成三步,每一步都有探针实测(约 130 个真实请求):
+
+1. **prompt 精确计数**(`kiro/prompt-tokens.ts`):用 ctok 的 TS 移植(`tokenizer/claude/`,v4.8 分词)数 wire 上的每段文本,再加实测的固定开销。Kiro 基础 1889;每条 history 消息 +2;工具列表按 `<functions><function>{json.dumps(sort_keys)}</function>…</functions>` 渲染后再 +277;工具调用 / 结果按 `antml:function_calls` / `function_results` 渲染,每组结果消息 −51(带文字 +4,空结果每个 +19,两个以上并行调用整组 +26,调用前有文字 +1,结果后接纯文字的 assistant +2);图片 = 28px patch 数 + 3(先把长边缩到 2576,patch 超过 4784 再按面积缩并向下取整到 patch)。无推理的探针上 prompt + 可见输出(文字 + 2)与上游 T 逐个相等。
+2. **输出 = T − prompt**,包含隐藏推理。T 用 `round`(百分比带浮点误差,`floor` 常少 1)。回放的 thinking 签名按它当初那一轮的推理 token 计(+2,更早的轮次再 +2):网关在下发签名时记下「输出 − 可见输出」,存在 request log 库的 `reasoning_tokens` 表(签名哈希为键);不认识的签名按长度估((长度 − 620) / 3.4),这一请求就退回估算。0.24 / 签名字符那条规则只剩其它模型在用。
+3. **缓存读写由 credits 定**:`credits = 1.227197e-5 × 写 + 3.31675e-6 × 读 + 2.210225561e-4 × 输出`,写 = prompt − 读。冷请求解出读 = 0.0,完全相同的重发解出 prompt − 读 = 13.3(上游总有约 13 个 token 不进缓存),Kiro 自己的基础提示常驻(约 1750 读)。解出来的读超出 [−64, prompt + 64] 就不信,退回本地缓存模型;没有 credits(计量帧丢失)同样退回。`accounting` 列记 `exact`。
+
+`message_start` 仍是「精确 prompt × 本地命中比例」(此时还没有 credits)。本地模型以为命中、上游其实没命中的那一轮,最终读数是 0,Claude Code 会沿用 `message_start` 的估值,只影响那一轮的显示。
+
+复核:无推理的轮次 `输出 − 可见输出` 应恰为 2;同一会话的连续轮次,本轮的读应接近上一轮的 prompt。框架常数是 kiro-cli 当前身份下测的,Kiro 换系统提示会让所有轮次整体偏移同一个数。
+
 ### 支持哪些模型 / 加模型要同改的地方
 
 `claude/models-catalog.ts` + `mapModel()`。

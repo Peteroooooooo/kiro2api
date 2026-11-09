@@ -6,7 +6,11 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import type { Event, KiroMeteringData } from '../kiro/model/events/base.js';
-import { estimatedPromptSplit, localPromptSplit } from '../kiro/prompt-cache.js';
+import {
+  estimatedPromptSplit,
+  localPromptSplit,
+  resolveOutputTokens,
+} from '../kiro/prompt-cache.js';
 import { type HookBus, UsageFinishEventImpl } from '../plugin-host/index.js';
 import { getLogger } from '../shared/logger.js';
 import { getRequestContext } from '../shared/request-context.js';
@@ -852,6 +856,10 @@ export class StreamContext {
   private outputTally = new TokenTally();
   /** Feeds `outputTokens`: billed reasoning behind thinking signatures, see hiddenReasoningTokens. */
   private hiddenReasoning = 0;
+  /** Raw upstream text, completed tool calls and signature: the visible output, for `resolveOutputTokens`. */
+  private visibleText = '';
+  private completedToolCalls: { name: string; input: unknown }[] = [];
+  private reasoningSignature = '';
   /**
    * True once a *complete* tool_use (isComplete) has been processed — even one
    * whose input object is empty, e.g. a no-required-args tool like
@@ -1223,6 +1231,7 @@ export class StreamContext {
 
     // Estimate tokens
     this.countOutput(content);
+    this.visibleText += content;
 
     // 原生 reasoning 路径已经发了 thinking content block。第一次切到普通文本
     // 时先关 thinking block，让 text block 正确接续在它后面（index 顺序保证）。
@@ -1310,7 +1319,10 @@ export class StreamContext {
       this.countOutput(text);
     }
 
-    if (signature) this.countHiddenReasoning(signature);
+    if (signature) {
+      this.countHiddenReasoning(signature);
+      this.reasoningSignature += signature;
+    }
 
     if (signature && this.reasoningBlockIndex !== undefined) {
       const sigEvent = this.stateManager.handleContentBlockDelta(this.reasoningBlockIndex, {
@@ -1623,6 +1635,7 @@ export class StreamContext {
     if (this.pendingUpstreamError) return events;
     parseCompletedToolInput(input, this.allowRawToolInputs?.has(pending.name));
     this.sawCompletedToolUse = true;
+    this.completedToolCalls.push({ name: toolUse.name, input: parsedOrRaw(input) });
 
     // Get or allocate block index
     let blockIndex = this.toolBlockIndices.get(toolUse.toolUseId);
@@ -1787,6 +1800,14 @@ export class StreamContext {
 
     // Use contextUsageEvent input_tokens if available, otherwise estimated
     const finalInputTokens = this.contextInputTokens ?? this.inputTokens;
+    this.outputTokens = resolveOutputTokens({
+      contextTokens: finalInputTokens,
+      fromUpstream: this.contextInputTokens !== undefined,
+      estimate: this.outputTokens,
+      text: this.visibleText,
+      toolUses: this.completedToolCalls,
+      signatures: this.reasoningSignature ? [this.reasoningSignature] : [],
+    });
 
     // 物化一次:hook meta 与下面的 stream statistics 日志共用同一份快照。别在其中
     // 一处直接读 `this.eventCounts` —— `getEventCounts()` 是对外唯一访问器,
@@ -1826,6 +1847,15 @@ export class StreamContext {
     });
 
     return events;
+  }
+}
+
+/** A completed tool call's input as an object when it parses, else the raw string. */
+export function parsedOrRaw(input: string): unknown {
+  try {
+    return input ? JSON.parse(input) : {};
+  } catch {
+    return input;
   }
 }
 
