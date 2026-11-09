@@ -69,7 +69,9 @@ describe('countKiroPrompt', () => {
   )('%s: prompt + visible output = upstream context', (_name, p) => {
     const count = prompt(p);
     expect(count?.estimated).toBe(false);
-    expect((count?.tokens ?? 0) + visibleOutputTokens(p.visibleText, [])).toBe(p.contextTokens);
+    expect((count?.tokens ?? 0) + visibleOutputTokens(p.visibleText, p.visibleToolUses ?? [])).toBe(
+      p.contextTokens,
+    );
   });
 
   it('counts replayed reasoning with the tokens recorded when it was issued', () => {

@@ -190,10 +190,17 @@ function resultText(result: { content?: unknown }): string {
     .join('\n');
 }
 
-function renderToolResults(results: readonly { content?: unknown }[], names: string[]): string {
+/**
+ * A replayed call's tool name is billed once at its real length and once at a fixed cost: with
+ * the name counted in both the call and its result, Read came out 1 token short and an MCP tool
+ * 9 over (probes 2026-11-09). The framing constants were fitted on Bash calls, so results render
+ * with that name.
+ */
+const RESULT_NAME = 'Bash';
+
+function renderToolResults(results: readonly { content?: unknown }[]): string {
   const items = results.map(
-    (r, i) =>
-      `<result>\n<name>${names[i] ?? ''}</name>\n<output>${resultText(r)}</output>\n</result>`,
+    (r) => `<result>\n<name>${RESULT_NAME}</name>\n<output>${resultText(r)}</output>\n</result>`,
   );
   return `<function_results>\n${items.join('\n')}\n</function_results>`;
 }
@@ -436,7 +443,6 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
   let tokens = FRAME.base + FRAME.historyMessage * history.length;
   let estimated = false;
   const unknownReasoning: KiroPromptCount['unknownReasoning'] = [];
-  const callNames = new Map<string, string>();
   let previousHadResults = false;
   let reasoningSeen = false;
 
@@ -454,8 +460,6 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
       if (toolUses.length) {
         if (text) tokens += FRAME.textBeforeCalls;
         if (toolUses.length > 1) tokens += FRAME.parallelCalls;
-        for (const use of toolUses)
-          callNames.set(String(use.toolUseId ?? ''), String(use.name ?? ''));
       } else if (previousHadResults) {
         tokens += FRAME.textAfterResults;
       }
@@ -497,11 +501,10 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
     const context = (user.userInputMessageContext ?? {}) as Json;
     const results = Array.isArray(context.toolResults) ? (context.toolResults as Json[]) : [];
     const images = Array.isArray(user.images) ? user.images : [];
-    const names = results.map((r) => callNames.get(String(r.toolUseId ?? '')) ?? '');
-    const part = memoized({ u: text, r: results, n: names, i: images }, () => {
+    const part = memoized({ u: text, r: results, i: images }, () => {
       let t = contentTokens(text);
       let known = true;
-      if (results.length) t += contentTokens(renderToolResults(results, names));
+      if (results.length) t += contentTokens(renderToolResults(results));
       for (const image of images) {
         const img = imageTokens(image);
         t += img.tokens;

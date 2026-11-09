@@ -314,7 +314,7 @@ KAS 形态:assistant 侧 `{content, toolUses:[{toolUseId,name,input}], reasoning
 
 **精确记账(2026-11-09 起,claude-opus-5.5)**:上面的估算只留给其它模型。opus-5.5 改成三步,每一步都有探针实测(约 130 个真实请求):
 
-1. **prompt 精确计数**(`kiro/prompt-tokens.ts`):用 ctok 的 TS 移植(`tokenizer/claude/`,v4.8 分词)数 wire 上的每段文本,再加实测的固定开销。Kiro 基础 1889;每条 history 消息 +2;工具列表按 `<functions><function>{json.dumps(sort_keys)}</function>…</functions>` 渲染后再 +277;工具调用 / 结果按 `antml:function_calls` / `function_results` 渲染,每组结果消息 −51(带文字 +4,空结果每个 +19,两个以上并行调用整组 +26,调用前有文字 +1,结果后接纯文字的 assistant +2);图片 = 28px patch 数 + 3(先把长边缩到 2576,patch 超过 4784 再按面积缩并向下取整到 patch)。无推理的探针上 prompt + 可见输出(文字 + 2)与上游 T 逐个相等。
+1. **prompt 精确计数**(`kiro/prompt-tokens.ts`):用 ctok 的 TS 移植(`tokenizer/claude/`,v4.8 分词)数 wire 上的每段文本,再加实测的固定开销。Kiro 基础 1889;每条 history 消息 +2;工具列表按 `<functions><function>{json.dumps(sort_keys)}</function>…</functions>` 渲染后再 +277;工具调用 / 结果按 `antml:function_calls` / `function_results` 渲染,每组结果消息 −51(带文字 +4,空结果每个 +19,两个以上并行调用整组 +26,调用前有文字 +1,结果后接纯文字的 assistant +2);工具名在网关的渲染里出现两次(调用的 `invoke name` 和结果的 `<name>`),上游只有一处按真名收,另一处是固定开销(Read、ReadFile、read、`mcp__github__get_file_contents` 的调用加结果,工具名部分都只比 Bash 多出名字本身一份;两处都按真名数时 Read 每次少 1、ToolSearch 多 3、这个 MCP 工具多 9),所以结果一律按 `<name>Bash</name>` 渲染;图片 = 28px patch 数 + 3(先把长边缩到 2576,patch 超过 4784 再按面积缩并向下取整到 patch)。无推理的探针上 prompt + 可见输出(文字 + 2)与上游 T 逐个相等。
 2. **输出 = T − prompt**,包含隐藏推理。T 用 `round`(百分比带浮点误差,`floor` 常少 1)。回放的 thinking 签名按它当初那一轮的推理 token 计:网关在下发签名时记下「输出 − 可见输出」和签发时的上下文哈希(工具列表 + 之前全部消息,与缓存前缀同一套哈希),存在 request log 库的 `reasoning_tokens` 表(签名哈希为键)。框架开销(2026-11-09 第二轮探针,用原样重发的 credits 反解出每个请求的真实 prompt):纯文字的 assistant 消息带推理时 +2;第一条带推理的消息(任何类型)之后,不带推理、也不紧跟在工具结果后面的纯文字 assistant 消息同样 +2;带工具调用的消息只算推理本身。**签名换了上下文就作废**:前面任一条消息或工具列表变了(Claude Code 的 ToolSearch 加载工具就是这种),上游不报错,直接忽略这段推理,既不算 token 也不算框架;网关比对上下文哈希,同样不计。不认识的签名(网关重启前、或别的网关签发的)按长度估((长度 − 620) / 3.4),这一请求的缓存退回本地模型,同时把这个估值钉给该签名,之后各轮都按同一个数算;下一轮签发的推理数 = 输出 − 可见输出,会反向带上这次的估算误差,两者相加仍等于上游的数,所以再往后的轮次又是精确的。回放的推理和普通文本一样进缓存。可见输出里的工具调用按同样的 `antml:function_calls` 渲染,再 −18(前面有文字 +1)。0.24 / 签名字符那条规则只剩其它模型在用。
 3. **缓存读写由 credits 定**。Kiro 按两种价里便宜的那种收(credits/token):`credits = 2.210225561e-4 × 输出 + min(3.319979e-6 × 读 + 3.316302e-5 × 写, 1.227197e-5 × prompt)`,写 = prompt − 读。写价是读价的 10 倍、是「全按未缓存」价的 2.7 倍,所以新增内容超过 prompt 约 30% 时(冷请求、一次贴进大段内容)按未缓存价收,这时 credits 看不出缓存,退回本地缓存模型(`local`)。其余情况解 `读 = (写价 × prompt − (credits − 输出价 × 输出)) / (写价 − 读价)`;解出来的读超出 [−64, prompt + 64] 就不信,没有 credits(计量帧丢失)同样退回。`accounting` 列记 `exact`。实测:接着上一轮往下聊,读 = 上一轮的 prompt − 约 3(上游最后几个 token 不进缓存),原样重发同样只差约 3;Kiro 自己的基础提示(约 1883)常驻缓存。
 
@@ -322,7 +322,7 @@ KAS 形态:assistant 侧 `{content, toolUses:[{toolUseId,name,input}], reasoning
 
 `message_start` 仍是「精确 prompt × 本地命中比例」(此时还没有 credits)。本地模型以为命中、credits 解出来读得少的那一轮,最终读数小于 `message_start` 的估值;若最终读数是 0,Claude Code 会沿用 `message_start` 的估值,只影响那一轮的显示。
 
-复核:无推理的轮次 `输出 − 可见输出` 应恰为 2;同一会话的连续轮次,本轮的读应等于上一轮的 prompt 减 3 左右。验证 prompt 计数最可靠的办法是原样重发一次:重发读到全部缓存,`prompt = (输出价 × T + (写价 − 读价) × 3 − credits) / (输出价 − 读价)` 与模型是否又推理了无关。框架常数是 kiro-cli 当前身份下测的,Kiro 换系统提示会让所有轮次整体偏移同一个数。
+复核:无推理的轮次 `输出 − 可见输出` 应恰为 2;同一会话的连续轮次,本轮的读应等于上一轮的 prompt 减 3 左右。验证 prompt 计数最可靠的办法是原样重发一次:重发读到全部缓存,`prompt = (输出价 × T + (写价 − 读价) × 3 − credits) / (输出价 − 读价)` 与模型是否又推理了无关。按未缓存价收的请求(会话第一轮)更直接:`prompt = (输出价 × T − credits) / (输出价 − 未缓存价)`,线上 14 条这样的请求与网关计数差在 ±2.6 以内。prompt 每少数 1 个 token,解出的读会多约 6.3 个(输出多算 1 个、它的价是写价的 6.7 倍),所以「读比上一轮 prompt 还多几十」通常是 prompt 少数了几个 token,而不是上游多缓存了什么。框架常数是 kiro-cli 当前身份下测的,Kiro 换系统提示会让所有轮次整体偏移同一个数。
 
 ### 支持哪些模型 / 加模型要同改的地方
 
