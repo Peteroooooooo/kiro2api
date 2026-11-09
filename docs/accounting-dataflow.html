@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>kiro2api 精确记账：数据怎么流</title>
+<style>
+  :root { --bg:#f7f7f5; --fg:#1d1d1f; --mute:#6b6b70; --line:#d9d9de;
+          --up:#2f6fd6; --local:#1f9d6b; --credit:#c07a12; --est:#b54848; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#17181b; --fg:#ececef; --mute:#9a9aa3; --line:#34353b; }
+  }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:32px 24px 64px; }
+  h1 { font-size:24px; margin:0 0 8px; }
+  h2 { font-size:18px; margin:36px 0 10px; border-bottom:1px solid var(--line); padding-bottom:4px; }
+  .lead { font-size:16px; padding:14px 16px; border-left:4px solid var(--local);
+          background:color-mix(in srgb, var(--local) 8%, transparent); }
+  .legend span { display:inline-block; margin-right:16px; font-size:13px; color:var(--mute); }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+  .flow { display:grid; grid-template-columns:1fr 40px 1fr 40px 1fr; align-items:center; gap:0; margin:16px 0; }
+  .box { border:2px solid var(--line); border-radius:8px; padding:10px 12px; font-size:13.5px; background:var(--bg); }
+  .box b { display:block; font-size:14.5px; margin-bottom:2px; }
+  .box.up { border-color:var(--up); } .box.local { border-color:var(--local); }
+  .box.credit { border-color:var(--credit); } .box.est { border-color:var(--est); border-style:dashed; }
+  .arrow { text-align:center; color:var(--mute); font-size:20px; }
+  .row { display:contents; }
+  .gap { height:14px; grid-column:1 / -1; }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th, td { border-bottom:1px solid var(--line); padding:7px 8px; text-align:left; vertical-align:top; }
+  th { color:var(--mute); font-weight:600; }
+  code { font:13px Consolas,monospace; background:color-mix(in srgb, var(--fg) 8%, transparent); padding:1px 4px; border-radius:3px; }
+  .num { font-variant-numeric:tabular-nums; }
+  details { margin-top:10px; } summary { cursor:pointer; color:var(--mute); }
+  .steps button { font:inherit; padding:4px 12px; margin-right:6px; border:1px solid var(--line);
+                  background:transparent; color:var(--fg); border-radius:6px; cursor:pointer; }
+  .steps button.on { border-color:var(--local); color:var(--local); }
+  .stepbody { margin-top:10px; padding:12px 14px; border:1px solid var(--line); border-radius:8px; min-height:90px; }
+</style>
+</head>
+<body>
+<main>
+<h1>kiro2api 精确记账：数据怎么流</h1>
+<p class="lead">opus-5.5 的请求现在按精确数字记账：输入（prompt）由网关自己用 Claude 分词器数出来，输出 = 上游给的总数 − 输入，缓存读/写按上游扣的 credits 反推。
+上线后（11-09 07:40 起）30 条请求里 21 条是精确记账，这 21 条用三个单价重算出的 credits 与上游实扣的差都在 1% 以内；其余 9 条退回旧的估算。</p>
+
+<div class="legend">
+  <span><i class="dot" style="background:var(--up)"></i>上游给的数</span>
+  <span><i class="dot" style="background:var(--local)"></i>网关精确算的数</span>
+  <span><i class="dot" style="background:var(--credit)"></i>从 credits 推的数</span>
+  <span><i class="dot" style="background:var(--est)"></i>退回估算的情况</span>
+</div>
+
+<h2>一张图</h2>
+<div class="flow">
+  <div class="box local"><b>① 发出前：数 prompt</b>把发给 Kiro 的请求体（历史消息、工具列表、工具调用和结果、图片）按上游的渲染格式拼成文本，用移植的 ctok 分词器数 token，再加实测的框架常数。</div>
+  <div class="arrow">→</div>
+  <div class="box up"><b>② 上游返回</b>Kiro 不给 token 数，只给两样：<br>总数 T = round(上下文占比 × 1,000,000)，以及本次扣的 credits。</div>
+  <div class="arrow">→</div>
+  <div class="box local"><b>③ 输出</b>输出 = T − prompt。<br>这个数包含看不见的 thinking，因为 T 本身就含。</div>
+
+  <div class="gap"></div>
+
+  <div class="box local"><b>⑤ 记下 thinking 的 token</b>本次 thinking 签名对应的 token = 输出 − 可见部分（文本＋工具调用）。存进 SQLite 表 <code>reasoning_tokens</code>，客户端下回把这段 thinking 带回来时直接查表。</div>
+  <div class="arrow">←</div>
+  <div class="box credit"><b>④ 缓存读/写</b>credits = 写价×写 + 读价×读 + 输出价×输出，<br>写 + 读 = prompt。两个方程解出读和写。</div>
+  <div class="arrow"></div>
+  <div class="box est"><b>退回估算</b>prompt 里有查不到的签名、读不出尺寸的图片、非 opus-5.5 模型、缺 credits 时，这一条按旧的缓存跟踪器估算，记为 <code>local</code>。</div>
+</div>
+
+<h2>逐步看</h2>
+<div class="steps">
+  <button data-s="0" class="on">① 数 prompt</button><button data-s="1">② 上游给的</button><button data-s="2">③ 输出</button><button data-s="3">④ 缓存拆分</button><button data-s="4">⑤ thinking 记录</button>
+  <div class="stepbody" id="stepbody"></div>
+</div>
+
+<h2>每一步用什么方法、产出什么</h2>
+<table>
+<tr><th>步骤</th><th>方法</th><th>产出</th></tr>
+<tr><td>数 prompt</td><td>ctok v4.8 分词器（开源，MIT）移植成 TypeScript；工具列表按 <code>&lt;functions&gt;</code> + 排序键 JSON 渲染，工具调用按 <code>function_calls / invoke / parameter</code> 渲染，工具结果按 <code>function_results</code> 渲染；图片按 28 px 一格算格数 + 3。</td><td>prompt token 数，及“是否含估值”标记</td></tr>
+<tr><td>框架常数</td><td>在真实上游上发 33 个探针请求测出：Kiro 自带系统提示 1889；每条历史消息 +2；工具列表外壳 +277；每次回复结尾 +2；还有工具调用、工具结果、空结果、并行调用各自的常数。</td><td>33 个探针全部做到 prompt + 可见输出 = 上游 T，一个 token 不差</td></tr>
+<tr><td>输出</td><td>T − prompt</td><td>含 thinking 的真实计费输出</td></tr>
+<tr><td>缓存拆分</td><td>实测单价（credits/token）：写 1.227197e-5，读 3.31675e-6，输出 2.210225561e-4。读 = (写价×prompt + 输出价×输出 − credits) ÷ (写价 − 读价)。</td><td>冷请求读 = 0；原样重发时只有 13 个 token 没命中缓存</td></tr>
+<tr><td>thinking 记录</td><td>签名的 sha256 当键，存它背后的 token 数。没见过的签名先按 (长度 − 620) ÷ 3.4 估一次并钉住，这一轮的误差会反向记进新回复的记录里，下一轮两者相加又等于上游的数。</td><td>表里现有 306 条；同一会话第二轮起恢复精确</td></tr>
+</table>
+
+<h2>实测（11-09 07:40 之后的线上请求）</h2>
+<table class="num">
+<tr><th>记账方式</th><th>请求数</th><th>credits 合计</th><th>说明</th></tr>
+<tr><td><code>exact</code></td><td>21</td><td>21.82</td><td>按三个单价重算 credits，21 条与实扣差都在 1% 以内</td></tr>
+<tr><td><code>local</code></td><td>9</td><td>10.32</td><td>会话第一次带回旧签名，或重启后跟踪器还是冷的</td></tr>
+</table>
+<p>例：07:42:39 一轮，上下文 313,265，读 307,578，写 3,069，输出 2,618，credits 1.636。</p>
+
+<h2>还不精确的地方</h2>
+<table>
+<tr><th>情况</th><th>为什么</th><th>怎么处理</th></tr>
+<tr><td>部署前就存在的 thinking 签名</td><td>当时没记下它背后的 token 数</td><td>第一次见到时估一次并钉住，该会话下一轮恢复精确</td></tr>
+<tr><td>opus-5.5 以外的模型</td><td>框架常数和分词器只在 opus-5.5 上测过</td><td>继续用旧的估算</td></tr>
+<tr><td>Kiro 换了系统提示或客户端身份</td><td>基础常数 1889 会变</td><td>表现为 exact 行变少、输出出现负数；需要重新测</td></tr>
+<tr><td>读不出尺寸的图片</td><td>文件头不是 PNG/JPEG/GIF/WebP</td><td>按 1600 估，这条记为 local</td></tr>
+</table>
+
+<details>
+<summary>代码位置</summary>
+<table>
+<tr><td><code>packages/core/src/tokenizer/claude/</code></td><td>移植的 ctok 分词器</td></tr>
+<tr><td><code>packages/core/src/kiro/prompt-tokens.ts</code></td><td>数 prompt、框架常数、图片、thinking 记录</td></tr>
+<tr><td><code>packages/core/src/kiro/prompt-cache.ts</code></td><td>输出 = T − prompt、credits 拆缓存、退回跟踪器</td></tr>
+<tr><td><code>packages/core/src/request-log/store.ts</code></td><td><code>reasoning_tokens</code> 表</td></tr>
+<tr><td><code>packages/core/test/kiro/prompt-tokens.test.ts</code></td><td>33 个真实探针的回归测试</td></tr>
+<tr><td><code>docs/PITFALLS.md</code></td><td>「上游 prompt 缓存与本地记账」一节的「精确记账」</td></tr>
+<tr><td>提交</td><td>de34ebf、d55e150、59de3f6、2cfd89e；镜像 kiro2api:2cfd89e 已上线</td></tr>
+</table>
+</details>
+</main>
+<script>
+const steps = [
+  "网关在请求被上游接受后，把真正发出去的请求体（去掉不能回放的 thinking 之后的那份）拿来数。每条消息的计数会缓存，长会话里旧消息不会重复分词。分词器第一次调用约 30 ms，之后每 MB 文本几十毫秒。",
+  "Kiro 的回复帧里只有三样：结束原因、上下文占比、扣了多少 credits。上下文占比乘以 1M 窗口得到 T。以前取整用向下取整，现在改为四舍五入，探针证明四舍五入才对。",
+  "T 是“prompt + 本轮全部计费输出”。prompt 精确了，减出来的输出就是上游实际计费的输出，包括看不见的 thinking。以前用每个签名字符 0.24 token 估 thinking，短回复会高估 3–4 倍。",
+  "prompt 和输出都确定后，credits 公式里只剩“读多少”一个未知数。冷请求解出来正好是 0，原样重发解出来只有 13 个 token 未命中，说明单价和公式都对。解出的读数若超出 [0, prompt] 64 个 token 以上，就不信它，退回跟踪器。",
+  "客户端下一轮会把这段 thinking 带回来，它会算进下一轮的 prompt。网关在本轮结束时把“输出 − 可见部分”记在签名下面，下一轮查表就知道这段 thinking 占多少 token。记录可以是负数：它在吸收前面估值的误差。"
+];
+const body = document.getElementById('stepbody');
+const btns = document.querySelectorAll('.steps button');
+function show(i){ body.textContent = steps[i]; btns.forEach(b => b.classList.toggle('on', +b.dataset.s === i)); }
+btns.forEach(b => b.addEventListener('click', () => show(+b.dataset.s)));
+show(0);
+</script>
+</body>
+</html>
