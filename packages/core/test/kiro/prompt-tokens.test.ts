@@ -100,6 +100,23 @@ describe('countKiroPrompt', () => {
     expect(none?.estimated).toBe(false);
     expect(unknown?.estimated).toBe(true);
     expect(unknown?.tokens).toBe((none?.tokens ?? 0) + 200 + 2);
+    expect(unknown?.unknownReasoning).toEqual([{ signature: 'Q'.repeat(1300), tokens: 200 }]);
+  });
+
+  it('pins an unknown signature once served, so later turns count it the same way', () => {
+    const wire = structuredClone(probe('rp_g4').wire) as {
+      conversationState: { history: { assistantResponseMessage?: Record<string, unknown> }[] };
+    };
+    const assistant = wire.conversationState.history.find((m) => m.assistantResponseMessage)
+      ?.assistantResponseMessage as Record<string, unknown>;
+    assistant.reasoningContent = { reasoningText: { text: '', signature: 'P'.repeat(2000) } };
+    const body = JSON.stringify(wire);
+    const ctx: RequestContext = { reqId: 'r', startTime: 0 };
+    inContext(ctx, () => notePromptServed('pin-test', body));
+    expect(ctx.promptTokens?.estimated).toBe(true);
+    const again = countKiroPrompt(body);
+    expect(again?.estimated).toBe(false);
+    expect(again?.tokens).toBe(ctx.promptTokens?.tokens);
   });
 
   it('leaves unmeasured models and non-conversation bodies alone', () => {

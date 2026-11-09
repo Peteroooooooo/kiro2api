@@ -29,7 +29,12 @@ import type { UsageFinishEvent } from '@kiro2claude/plugin-api';
 import { isGptModelId } from '../claude/converter.js';
 import { getRequestContext } from '../shared/request-context.js';
 import { countUpstreamTokens } from '../token.js';
-import { countKiroPrompt, noteReasoningTokens, visibleOutputTokens } from './prompt-tokens.js';
+import {
+  countKiroPrompt,
+  noteReasoningTokens,
+  pinUnknownReasoning,
+  visibleOutputTokens,
+} from './prompt-tokens.js';
 
 export const PROMPT_CACHE_TTL_MS = 5 * 60_000;
 
@@ -203,7 +208,13 @@ export function notePromptServed(accountId: string | undefined, body: string): v
   const shape = promptShapeOf(body);
   if (!shape) return;
   ctx.promptCache = promptCacheTracker.serve(accountId ?? SINGLE_ACCOUNT, shape);
-  ctx.promptTokens = countKiroPrompt(body);
+  const count = countKiroPrompt(body);
+  if (count) {
+    pinUnknownReasoning(count.unknownReasoning);
+    ctx.promptTokens = { tokens: count.tokens, estimated: count.estimated };
+  } else {
+    ctx.promptTokens = undefined;
+  }
 }
 
 /**
@@ -223,9 +234,8 @@ export function resolveOutputTokens(args: {
   if (!prompt || !args.fromUpstream) return args.estimate;
   const output = args.contextTokens - prompt.tokens;
   if (output < 0) return args.estimate;
-  if (args.signatures.length > 0 && !prompt.estimated) {
-    const hidden = output - visibleOutputTokens(args.text, args.toolUses);
-    noteReasoningTokens(args.signatures, Math.max(hidden, 0));
+  if (args.signatures.length > 0) {
+    noteReasoningTokens(args.signatures, output - visibleOutputTokens(args.text, args.toolUses));
   }
   return output;
 }

@@ -62,6 +62,8 @@ export interface KiroPromptCount {
   tokens: number;
   /** Part of the count is an estimate (unknown replayed reasoning or unreadable image). */
   estimated: boolean;
+  /** Replayed signatures the gateway had no record of, with the estimate used for each. */
+  unknownReasoning: { signature: string; tokens: number }[];
 }
 
 function contentTokens(text: string): number {
@@ -266,6 +268,10 @@ function rememberReasoning(key: string, tokens: number): void {
  * Records the reasoning tokens a response billed behind its signatures, for when the client
  * replays them. Signatures arrive one per reasoning block; all of a response's reasoning is
  * filed under each, since the converter replays at most one block per assistant message.
+ *
+ * The count is `output - visible output` unclamped: after a prompt that held an estimated
+ * (pinned) signature it carries that estimate's error with the opposite sign, so a later prompt
+ * replaying both signatures sums to the upstream's figure again. It can therefore be negative.
  */
 export function noteReasoningTokens(signatures: readonly string[], tokens: number): void {
   for (const signature of signatures) {
@@ -278,6 +284,16 @@ export function noteReasoningTokens(signatures: readonly string[], tokens: numbe
       // The count stays in memory; persistence is best effort.
     }
   }
+}
+
+/**
+ * Fixes each unknown replayed signature at the estimate this request used, so every later
+ * request counts it the same way (see `noteReasoningTokens`).
+ */
+export function pinUnknownReasoning(
+  unknown: readonly { signature: string; tokens: number }[],
+): void {
+  for (const { signature, tokens } of unknown) noteReasoningTokens([signature], tokens);
 }
 
 /** Reasoning tokens behind a replayed signature, measured when it was issued, else estimated. */
@@ -340,6 +356,7 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
 
   let tokens = FRAME.base + FRAME.historyMessage * history.length;
   let estimated = false;
+  const unknownReasoning: { signature: string; tokens: number }[] = [];
   const callNames = new Map<string, string>();
   let previousHadResults = false;
   let lastAssistant = -1;
@@ -374,7 +391,10 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
         const replay = replayedReasoningTokens(signature);
         tokens +=
           replay.tokens + FRAME.reasoning + (index < lastAssistant ? FRAME.olderReasoning : 0);
-        if (!replay.known) estimated = true;
+        if (!replay.known) {
+          estimated = true;
+          unknownReasoning.push({ signature, tokens: replay.tokens });
+        }
       }
       previousHadResults = false;
       return;
@@ -416,7 +436,7 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
     previousHadResults = results.length > 0;
   });
 
-  return { tokens, estimated };
+  return { tokens, estimated, unknownReasoning };
 }
 
 /**
@@ -428,6 +448,9 @@ export function visibleOutputTokens(
   toolUses: readonly { name: string; input: unknown }[],
 ): number {
   let tokens = contentTokens(text) + FRAME.outputEnd;
-  if (toolUses.length) tokens += contentTokens(renderToolCalls(toolUses)) + FRAME.outputCalls;
+  if (toolUses.length) {
+    tokens += contentTokens(renderToolCalls(toolUses)) + FRAME.outputCalls;
+    if (text) tokens += FRAME.textBeforeCalls;
+  }
   return tokens;
 }
