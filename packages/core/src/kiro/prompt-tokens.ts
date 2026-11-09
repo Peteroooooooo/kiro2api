@@ -41,9 +41,9 @@ const FRAME = {
   textAfterResults: 2,
   /** Each image, beyond its patches. */
   image: 3,
-  /** A replayed reasoning block, beyond the reasoning tokens it carries. */
+  /** A replayed reasoning block in a text-only assistant message, beyond its reasoning tokens. */
   reasoning: 2,
-  /** Extra for a replayed reasoning block in an assistant message before the last one. */
+  /** Extra for such a block in an assistant message before the last one. */
   olderReasoning: 2,
   /** End of every response. */
   outputEnd: 2,
@@ -389,8 +389,11 @@ export function countKiroPrompt(body: string): KiroPromptCount | undefined {
       const signature = reasoning?.reasoningText?.signature;
       if (typeof signature === 'string' && signature) {
         const replay = replayedReasoningTokens(signature);
-        tokens +=
-          replay.tokens + FRAME.reasoning + (index < lastAssistant ? FRAME.olderReasoning : 0);
+        tokens += replay.tokens;
+        // Next to tool calls the block costs only its reasoning (measured on a real tool loop).
+        if (!toolUses.length) {
+          tokens += FRAME.reasoning + (index < lastAssistant ? FRAME.olderReasoning : 0);
+        }
         if (!replay.known) {
           estimated = true;
           unknownReasoning.push({ signature, tokens: replay.tokens });

@@ -10,6 +10,7 @@ import {
   countKiroPrompt,
   imagePatches,
   imageSize,
+  noteReasoningTokens,
   visibleOutputTokens,
 } from '../../src/kiro/prompt-tokens.js';
 import { UsageFinishEventImpl } from '../../src/plugin-host/index.js';
@@ -27,6 +28,8 @@ interface Probe {
   visibleText: string;
   signature: string | null;
   wire: unknown;
+  /** Reasoning tokens the issuing responses billed behind the signatures this wire replays. */
+  replayed?: { signature: string; tokens: number }[];
 }
 
 const probes: Probe[] = JSON.parse(
@@ -47,7 +50,7 @@ function inContext<T>(ctx: RequestContext, fn: () => T): T {
 }
 
 describe('countKiroPrompt', () => {
-  const plain = probes.filter((p) => !p.signature && !p.name.startsWith('rp_'));
+  const plain = probes.filter((p) => !p.signature && !p.name.startsWith('rp_') && !p.replayed);
 
   it.each(
     plain.map((p) => [p.name, p] as const),
@@ -80,6 +83,15 @@ describe('countKiroPrompt', () => {
       expect((count?.tokens ?? 0) + visibleOutputTokens(replay.visibleText, [])).toBe(
         replay.contextTokens,
       );
+    }
+  });
+
+  it('a real tool loop: reasoning next to tool calls costs only its own tokens', () => {
+    for (const p of probes.filter((x) => x.replayed)) {
+      for (const r of p.replayed ?? []) noteReasoningTokens([r.signature], r.tokens);
+      const count = prompt(p);
+      expect(count?.estimated).toBe(false);
+      expect((count?.tokens ?? 0) + visibleOutputTokens(p.visibleText, [])).toBe(p.contextTokens);
     }
   });
 
