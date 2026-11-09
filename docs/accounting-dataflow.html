@@ -42,7 +42,7 @@
 <main>
 <h1>kiro2api 精确记账：数据怎么流</h1>
 <p class="lead">opus-5.5 的请求现在按精确数字记账：输入（prompt）由网关自己用 Claude 分词器数出来，输出 = 上游给的总数 − 输入，缓存读/写按上游扣的 credits 反推。
-上线后（11-09 07:40 起）30 条请求里 21 条是精确记账，这 21 条用三个单价重算出的 credits 与上游实扣的差都在 1% 以内；其余 9 条退回旧的估算。</p>
+判断标准：同一会话里本轮读到的缓存应等于上一轮的 prompt。11-09 09:05 上线的版本在一个新会话的 11 对连续请求上做到 0 到 1 个 token 的差。</p>
 
 <div class="legend">
   <span><i class="dot" style="background:var(--up)"></i>上游给的数</span>
@@ -61,11 +61,11 @@
 
   <div class="gap"></div>
 
-  <div class="box local"><b>⑤ 记下 thinking 的 token</b>本次 thinking 签名对应的 token = 输出 − 可见部分（文本＋工具调用）。存进 SQLite 表 <code>reasoning_tokens</code>，客户端下回把这段 thinking 带回来时直接查表。</div>
+  <div class="box local"><b>⑤ 记下 thinking 的 token</b>本次 thinking 签名对应的 token = 输出 − 可见部分（文本＋工具调用），连同签发时的上下文（工具列表＋之前全部消息的哈希）存进 SQLite 表 <code>reasoning_tokens</code>。客户端下回把这段 thinking 带回来时查表；上下文变了的签名上游会忽略，网关也不算。</div>
   <div class="arrow">←</div>
-  <div class="box credit"><b>④ 缓存读/写</b>credits = 写价×写 + 读价×读 + 输出价×输出，<br>写 + 读 = prompt。两个方程解出读和写。</div>
+  <div class="box credit"><b>④ 缓存读/写</b>Kiro 收两种价里便宜的那种：<br>读价×读 + 写价×写，或 未缓存价×整个 prompt。<br>按前一种收时解出读和写；按后一种收时 credits 看不出缓存。</div>
   <div class="arrow"></div>
-  <div class="box est"><b>退回估算</b>prompt 里有查不到的签名、读不出尺寸的图片、非 opus-5.5 模型、缺 credits 时，这一条按旧的缓存跟踪器估算，记为 <code>local</code>。</div>
+  <div class="box est"><b>退回估算</b>按未缓存价收费（冷请求、新增内容超过 prompt 约 30%）、prompt 里有查不到的签名、读不出尺寸的图片、非 opus-5.5 模型、缺 credits 时，这一条的读写按旧的缓存跟踪器估算，记为 <code>local</code>。</div>
 </div>
 
 <h2>逐步看</h2>
@@ -78,26 +78,31 @@
 <table>
 <tr><th>步骤</th><th>方法</th><th>产出</th></tr>
 <tr><td>数 prompt</td><td>ctok v4.8 分词器（开源，MIT）移植成 TypeScript；工具列表按 <code>&lt;functions&gt;</code> + 排序键 JSON 渲染，工具调用按 <code>function_calls / invoke / parameter</code> 渲染，工具结果按 <code>function_results</code> 渲染；图片按 28 px 一格算格数 + 3。</td><td>prompt token 数，及“是否含估值”标记</td></tr>
-<tr><td>框架常数</td><td>在真实上游上发 33 个探针请求测出：Kiro 自带系统提示 1889；每条历史消息 +2；工具列表外壳 +277；每次回复结尾 +2；还有工具调用、工具结果、空结果、并行调用各自的常数。</td><td>33 个探针全部做到 prompt + 可见输出 = 上游 T，一个 token 不差</td></tr>
+<tr><td>框架常数</td><td>在真实上游上发探针请求测出：Kiro 自带系统提示 1889；每条历史消息 +2；工具列表外壳 +277；每次回复结尾 +2；还有工具调用、工具结果、空结果、并行调用各自的常数。带回的 thinking：纯文字回复带推理 +2，第一次推理之后不紧跟工具结果的纯文字回复也 +2，带工具调用的回复只算推理本身。工具名：回放的一次调用里上游只按真名收一处，另一处是固定开销，所以工具结果一律按 Bash 的名字数（以前按真名数，Read 每次少 1、ToolSearch 多 3、MCP 工具多 9 左右）。</td><td>70 个探针全部做到与上游的 prompt 一个 token 不差（带推理的用原样重发的 credits 反解真实 prompt）</td></tr>
 <tr><td>输出</td><td>T − prompt</td><td>含 thinking 的真实计费输出</td></tr>
-<tr><td>缓存拆分</td><td>实测单价（credits/token）：写 1.227197e-5，读 3.31675e-6，输出 2.210225561e-4。读 = (写价×prompt + 输出价×输出 − credits) ÷ (写价 − 读价)。</td><td>冷请求读 = 0；原样重发时只有 13 个 token 没命中缓存</td></tr>
-<tr><td>thinking 记录</td><td>签名的 sha256 当键，存它背后的 token 数。没见过的签名先按 (长度 − 620) ÷ 3.4 估一次并钉住，这一轮的误差会反向记进新回复的记录里，下一轮两者相加又等于上游的数。</td><td>表里现有 306 条；同一会话第二轮起恢复精确</td></tr>
+<tr><td>缓存拆分</td><td>实测单价（credits/token）：读 3.319979e-6，写 3.316302e-5，未缓存 1.227197e-5，输出 2.210225561e-4。credits = 输出价×输出 + min(读价×读 + 写价×写, 未缓存价×prompt)。按前一种收时：读 = (写价×prompt − (credits − 输出价×输出)) ÷ (写价 − 读价)。</td><td>接着上一轮聊：读 = 上一轮 prompt − 约 3；原样重发同样只差约 3；探针上 26 个命中的请求全部在 ±1.3 token 内</td></tr>
+<tr><td>thinking 记录</td><td>签名的 sha256 当键，存它背后的 token 数和签发时的上下文哈希。上下文对不上（之前的消息或工具列表变了，例如 Claude Code 用 ToolSearch 加载了工具）就按 0 算，探针证明上游此时直接忽略这段推理。没见过的签名先按 (长度 − 620) ÷ 3.4 估一次并钉住，这一轮的误差会反向记进新回复的记录里，下一轮两者相加又等于上游的数。</td><td>同一会话第二轮起恢复精确</td></tr>
 </table>
 
-<h2>实测（11-09 07:40 之后的线上请求）</h2>
+<h2>实测（11-09 线上请求）</h2>
+<p>“上一轮 prompt − 本轮读”：0 表示完全对上；负数表示读得比上一轮 prompt 还多，说明本轮 prompt 少数了（少数 1 个 token，读就多出约 6 个）。</p>
 <table class="num">
-<tr><th>记账方式</th><th>请求数</th><th>credits 合计</th><th>说明</th></tr>
-<tr><td><code>exact</code></td><td>21</td><td>21.82</td><td>按三个单价重算 credits，21 条与实扣差都在 1% 以内</td></tr>
-<tr><td><code>local</code></td><td>9</td><td>10.32</td><td>会话第一次带回旧签名，或重启后跟踪器还是冷的</td></tr>
+<tr><th>版本</th><th>成对的连续请求</th><th>上一轮 prompt − 本轮读</th><th>说明</th></tr>
+<tr><td>2cfd89e（两价模型）</td><td>—</td><td>几百到 2000 以上</td><td>把新写的部分按未缓存价算，读少了约 2.3 倍的新增内容</td></tr>
+<tr><td>7978e6e（三价模型）</td><td>24</td><td>中位 −8，大多 −40 到 +22</td><td>还剩工具名按真名数两遍的误差</td></tr>
+<tr><td>6625240（工具名修正）</td><td>17</td><td>新会话 11 对：−1 到 +1；部署前开始的老会话 6 对：−12 到 −17</td><td>老会话的 prompt 稳定少数 2–3 个，来源没查到</td></tr>
 </table>
-<p>例：07:42:39 一轮，上下文 313,265，读 307,578，写 3,069，输出 2,618，credits 1.636。</p>
+<p>按未缓存价收的请求可以直接从 credits 反解 prompt：线上 15 条与网关计数差在 ±2.6 以内。</p>
 
 <h2>还不精确的地方</h2>
 <table>
 <tr><th>情况</th><th>为什么</th><th>怎么处理</th></tr>
 <tr><td>部署前就存在的 thinking 签名</td><td>当时没记下它背后的 token 数</td><td>第一次见到时估一次并钉住，该会话下一轮恢复精确</td></tr>
 <tr><td>opus-5.5 以外的模型</td><td>框架常数和分词器只在 opus-5.5 上测过</td><td>继续用旧的估算</td></tr>
+<tr><td>按未缓存价收费的请求</td><td>Kiro 这时按整个 prompt 的未缓存价收，credits 里没有缓存的信息</td><td>读写按缓存跟踪器估，记为 local；prompt 和输出仍是精确的</td></tr>
 <tr><td>Kiro 换了系统提示或客户端身份</td><td>基础常数 1889 会变</td><td>表现为 exact 行变少、输出出现负数；需要重新测</td></tr>
+<tr><td>部署前开始的老会话</td><td>一个 17 万 token 的会话每轮 prompt 都少数 2–3 个，请求体没留存，没法逐条对</td><td>差值固定不累积，读写各偏 15 个左右</td></tr>
+<tr><td>签名在上下文变了之后又跟着纯文字消息</td><td>这种组合的框架开销没测</td><td>按已测的规则算，可能差 2</td></tr>
 <tr><td>读不出尺寸的图片</td><td>文件头不是 PNG/JPEG/GIF/WebP</td><td>按 1600 估，这条记为 local</td></tr>
 </table>
 
@@ -108,9 +113,9 @@
 <tr><td><code>packages/core/src/kiro/prompt-tokens.ts</code></td><td>数 prompt、框架常数、图片、thinking 记录</td></tr>
 <tr><td><code>packages/core/src/kiro/prompt-cache.ts</code></td><td>输出 = T − prompt、credits 拆缓存、退回跟踪器</td></tr>
 <tr><td><code>packages/core/src/request-log/store.ts</code></td><td><code>reasoning_tokens</code> 表</td></tr>
-<tr><td><code>packages/core/test/kiro/prompt-tokens.test.ts</code></td><td>33 个真实探针的回归测试</td></tr>
+<tr><td><code>packages/core/test/kiro/prompt-tokens.test.ts</code></td><td>70 个真实探针的回归测试</td></tr>
 <tr><td><code>docs/PITFALLS.md</code></td><td>「上游 prompt 缓存与本地记账」一节的「精确记账」</td></tr>
-<tr><td>提交</td><td>de34ebf、d55e150、59de3f6、2cfd89e；镜像 kiro2api:2cfd89e 已上线</td></tr>
+<tr><td>提交</td><td>de34ebf、d55e150、59de3f6、2cfd89e、7978e6e、6625240；镜像 kiro2api:6625240 已上线（11-09 09:05 UTC）</td></tr>
 </table>
 </details>
 </main>
@@ -119,8 +124,8 @@ const steps = [
   "网关在请求被上游接受后，把真正发出去的请求体（去掉不能回放的 thinking 之后的那份）拿来数。每条消息的计数会缓存，长会话里旧消息不会重复分词。分词器第一次调用约 30 ms，之后每 MB 文本几十毫秒。",
   "Kiro 的回复帧里只有三样：结束原因、上下文占比、扣了多少 credits。上下文占比乘以 1M 窗口得到 T。以前取整用向下取整，现在改为四舍五入，探针证明四舍五入才对。",
   "T 是“prompt + 本轮全部计费输出”。prompt 精确了，减出来的输出就是上游实际计费的输出，包括看不见的 thinking。以前用每个签名字符 0.24 token 估 thinking，短回复会高估 3–4 倍。",
-  "prompt 和输出都确定后，credits 公式里只剩“读多少”一个未知数。冷请求解出来正好是 0，原样重发解出来只有 13 个 token 未命中，说明单价和公式都对。解出的读数若超出 [0, prompt] 64 个 token 以上，就不信它，退回跟踪器。",
-  "客户端下一轮会把这段 thinking 带回来，它会算进下一轮的 prompt。网关在本轮结束时把“输出 − 可见部分”记在签名下面，下一轮查表就知道这段 thinking 占多少 token。记录可以是负数：它在吸收前面估值的误差。"
+  "prompt 和输出都确定后，credits 公式里只剩“读多少”一个未知数。Kiro 收两种价里便宜的：有缓存时，读的部分按读价、新写的部分按写价（写价是未缓存价的 2.7 倍）；新写的太多（超过 prompt 约 30%）时整个 prompt 按未缓存价收。前一种能解出读数：接着聊时正好是上一轮 prompt 减 3 左右。后一种看不出缓存，退回跟踪器。第一版只用了两个价，把新写的部分按未缓存价算，结果每轮读数都少了约 2.3 倍的新增内容，已修正。",
+  "客户端下一轮会把这段 thinking 带回来，它会算进下一轮的 prompt。网关在本轮结束时把“输出 − 可见部分”和当时的上下文哈希记在签名下面，下一轮查表就知道这段 thinking 占多少 token。签名和上下文绑定：之前的消息或工具列表一变，上游就不再计入这段推理，网关比对哈希后同样不算。记录可以是负数：它在吸收前面估值的误差。"
 ];
 const body = document.getElementById('stepbody');
 const btns = document.querySelectorAll('.steps button');
