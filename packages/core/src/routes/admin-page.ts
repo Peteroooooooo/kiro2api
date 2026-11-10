@@ -440,7 +440,8 @@ a { color: var(--accent); }
     tb.innerHTML = accounts.map(function (a) {
       var st = a.status === 'ok' ? '<span class="chip ok">可用</span>'
         : a.status === 'cooling' ? '<span class="chip cooling">冷却中</span><div class="sub">' + esc(a.cooldownReason) + '，' + fmtUntil(a.cooldownUntil) + '后恢复</div>'
-        : '<span class="chip disabled">已停用</span>' + (a.disabledReason ? '<div class="sub">' + esc(a.disabledReason) + '</div>' : '');
+        : '<span class="chip disabled">已停用</span>' + (a.disabledReason ? '<div class="sub">' + esc(a.disabledReason) + '</div>' : '')
+          + (a.autoEnableAt ? '<div class="sub" title="上游额度重置时间 ' + esc(new Date(a.autoEnableAt).toLocaleString()) + '；也可随时手动启用">' + fmtUntil(a.autoEnableAt) + '后自动启用</div>' : '');
       if (a.stats.lastError && a.status === 'ok') st += '<div class="sub" title="' + esc(a.stats.lastError) + '">上次错误 ' + fmtTime(a.stats.lastErrorAt) + '</div>';
       if (a.throttles) a.throttles.forEach(function (t) { st += '<div class="sub">' + (t.model ? esc(t.model) + ' ' : '') + '限速退避，' + fmtUntil(t.until) + '后重试（不换号）</div>'; });
       if (a.inflight) st += '<div class="sub">在途 ' + a.inflight + '</div>';

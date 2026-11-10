@@ -39,6 +39,8 @@ export interface AccountQuota {
   /** Credits the upstream billing events reported since `checkedAt`; reset on every query. */
   sinceCheck?: number;
   checkedAt: string;
+  /** When the upstream resets the monthly plan (`nextDateReset`), if it said. */
+  resetsAt?: string;
 }
 
 export interface StoredAccount {
@@ -58,6 +60,11 @@ export interface StoredAccount {
   modelsCheckedAt?: string;
   /** Why the pool disabled the account on its own (cleared when re-enabled). */
   disabledReason?: string;
+  /**
+   * Set only when the pool disabled the account because its quota ran out: the pool turns
+   * it back on at this time (the upstream reset). Accounts disabled by hand never have it.
+   */
+  autoEnableAt?: string;
   stats: AccountStats;
 }
 

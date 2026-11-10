@@ -231,6 +231,9 @@ async function main(): Promise<void> {
   try {
     if (pool) {
       await pool.warmup();
+      // 额度耗尽被自动停用的号:到了上游重置时间就启用并重查(启动时先扫一遍,之后每分钟)。
+      await pool.sweepAutoEnable();
+      pool.startAutoEnable();
       const usable = pool.list().filter((a) => a.status === 'ok').length;
       logger.info(`启动自检完成：号池 ${usable}/${pool.list().length} 个账号可用`);
       // 订阅会在后台变(升级 / 到期降为免费),可用模型跟着变:每 6 小时重查一次。

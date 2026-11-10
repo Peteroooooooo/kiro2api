@@ -50,9 +50,21 @@
  *
  * ## Hard cooldowns (account faults)
  *
- * Quota exhausted 6 h or until a quota refresh shows headroom; unauthorized
- * 10 min; token refresh failure 5 min. A refresh token the OIDC service rejects
- * as invalid disables the account until it logs in again.
+ * Unauthorized 10 min; token refresh failure 5 min. A refresh token the OIDC
+ * service rejects as invalid disables the account until it logs in again.
+ *
+ * ## Quota used up: auto-disable, auto re-enable
+ *
+ * An account is used up when the monthly plan and every active extra grant are.
+ * The upstream quota query is the judge: when it says so, the account is
+ * disabled with `autoEnableAt` = the upstream reset (`nextDateReset`), persisted.
+ * Billed credits since the last query (`sinceCheck`) only trigger such a query
+ * once they push the estimate over the limit (one in flight per account). A
+ * request rejected as quota exhausted disables at once (last known reset, else
+ * 6 h) and queries for the real reset time. At `autoEnableAt` a sweep turns the
+ * account back on and queries again; still used up = disabled again until the
+ * next reset. Accounts disabled by hand have no `autoEnableAt` and are never
+ * turned on by the pool; enabling or disabling by hand clears it.
  */
 
 import type { LoadedCredentials } from '../kiro/credentials-loader.js';
@@ -129,20 +141,43 @@ export function extraQuotaOf(
   };
 }
 
-/** True when neither the monthly plan nor any active extra grant has credits left. */
-function quotaExhausted(q: StoredAccount['quota']): boolean {
-  if (!q || !(q.limit > 0) || q.current < q.limit) return false;
+/** Credits left on the active extra grants of a snapshot (0 when none or expired). */
+function extraLeft(q: NonNullable<StoredAccount['quota']>, now: number): number {
   const x = q.extra;
-  if (x && x.current < x.limit && !(x.expiresAt && Date.parse(x.expiresAt) <= Date.now()))
-    return false;
-  return true;
+  if (!x || (x.expiresAt && Date.parse(x.expiresAt) <= now)) return 0;
+  return Math.max(0, x.limit - x.current);
 }
+
+/** True when the upstream snapshot says neither the monthly plan nor any active extra grant has credits left. */
+function quotaExhausted(q: StoredAccount['quota'], now = Date.now()): boolean {
+  if (!q || !(q.limit > 0) || q.current < q.limit) return false;
+  return extraLeft(q, now) <= 0;
+}
+
+/**
+ * Estimate only: the snapshot plus the credits billed since it reach the plan plus the
+ * remaining extra. Never disables by itself; it triggers an upstream quota query.
+ */
+function quotaEstimateExhausted(q: StoredAccount['quota'], now = Date.now()): boolean {
+  if (!q || !(q.limit > 0)) return false;
+  return q.current + (q.sinceCheck ?? 0) >= q.limit + extraLeft(q, now);
+}
+
+const QUOTA_DISABLED_REASON = 'quota used up (monthly plan and extra credits)';
 
 const KIRO_CLI_ACCOUNT_ID = 'kiro-cli';
 const AFFINITY_TTL_MS = 6 * 3_600_000;
 const AFFINITY_MAX = 10_000;
+const QUOTA = {
+  /** Auto re-enable after this when the upstream gave no reset time. */
+  fallbackMs: 6 * 3_600_000,
+  /** The reset time has passed but the upstream still says used up: look again after this. */
+  recheckMs: 15 * 60_000,
+  /** Least gap between two estimate-triggered quota queries of one account. */
+  estimateGapMs: 30_000,
+  sweepMs: 60_000,
+};
 const COOLDOWN = {
-  quotaMs: 6 * 3_600_000,
   unauthorizedMs: 10 * 60_000,
   refreshFailedMs: 5 * 60_000,
 };
@@ -173,7 +208,7 @@ interface Hold {
 interface Slot {
   account: StoredAccount;
   manager: SingleTokenManager;
-  /** Hard cooldown (quota / credential): the account is out of rotation until then. */
+  /** Hard cooldown (credential): the account is out of rotation until then. */
   cooldownUntil: number;
   cooldownReason?: string;
   lastPickedAt: number;
@@ -183,6 +218,8 @@ interface Slot {
   hold: Hold;
   /** Per-model holds after a capacity answer: upstream model id → hold. */
   modelHolds: Map<string, Hold>;
+  /** Last estimate-triggered quota query (ms), to space them out. */
+  estimateCheckAt: number;
 }
 
 export interface ThrottleView {
@@ -204,6 +241,8 @@ export interface AccountView {
   subscription?: string;
   quota?: StoredAccount['quota'];
   disabledReason?: string;
+  /** Only for accounts the pool disabled because the quota ran out: when it turns them back on. */
+  autoEnableAt?: string;
   status: 'ok' | 'cooling' | 'disabled';
   cooldownUntil?: string;
   cooldownReason?: string;
@@ -294,6 +333,9 @@ export class AccountPool implements TokenSource {
   readonly #slots = new Map<string, Slot>();
   readonly #affinity = new Map<string, { id: string; at: number }>();
   readonly #renameListeners: ((id: string, from: string, to: string) => void)[] = [];
+  /** Quota queries the pool started on its own, one per account. */
+  readonly #quotaChecks = new Map<string, Promise<void>>();
+  #sweepTimer: NodeJS.Timeout | undefined;
 
   constructor(config: Config, store: AccountStore, kiroCli?: LoadedCredentials) {
     this.#config = config;
@@ -450,10 +492,17 @@ export class AccountPool implements TokenSource {
         stats.lastError = why;
         break;
       }
-      case 'quota_exhausted':
-        this.#cool(slot, now + COOLDOWN.quotaMs, 'quota exhausted');
-        stats.lastError = slot.cooldownReason;
+      case 'quota_exhausted': {
+        // The request already proved the account cannot serve: disable now (until the
+        // last known reset, else 6 h), then ask the upstream for the real reset time.
+        // An account disabled by hand meanwhile stays a manual disable.
+        stats.lastError = 'quota exhausted';
+        if (!slot.account.enabled && slot.account.autoEnableAt === undefined) break;
+        const known = Date.parse(slot.account.quota?.resetsAt ?? '');
+        this.#autoDisable(slot, known > now ? known : now + QUOTA.fallbackMs, 'request rejected');
+        this.#checkQuota(slot, 'request rejected');
         break;
+      }
       case 'unauthorized':
         this.#cool(slot, now + COOLDOWN.unauthorizedMs, 'upstream rejected the credential');
         stats.lastError = slot.cooldownReason;
@@ -474,6 +523,54 @@ export class AccountPool implements TokenSource {
     const q = slot.account.quota;
     if (q) q.sinceCheck = (q.sinceCheck ?? 0) + credits;
     this.#store.scheduleSave();
+    const now = Date.now();
+    if (
+      slot.account.enabled &&
+      quotaEstimateExhausted(q, now) &&
+      now - slot.estimateCheckAt >= QUOTA.estimateGapMs &&
+      !this.#quotaChecks.has(accountId)
+    ) {
+      slot.estimateCheckAt = now;
+      this.#checkQuota(slot, 'billed credits reached the limit');
+    }
+  }
+
+  /** Wait for the quota queries the pool started on its own (tests, shutdown). */
+  async settleQuotaChecks(): Promise<void> {
+    while (this.#quotaChecks.size > 0) await Promise.all(this.#quotaChecks.values());
+  }
+
+  /**
+   * Turn quota-disabled accounts whose `autoEnableAt` has come back on, then query their
+   * quota; one still used up is disabled again until the next reset. Accounts without
+   * `autoEnableAt` (disabled by hand, or for a credential) are never touched.
+   */
+  async sweepAutoEnable(now = Date.now()): Promise<void> {
+    for (const slot of this.#slots.values()) {
+      const at = Date.parse(slot.account.autoEnableAt ?? '');
+      if (slot.account.enabled || !(at <= now)) continue;
+      getLogger().info({
+        msg: 'pool account re-enabled after quota reset',
+        account: slot.account.id,
+        auto_enable_at: slot.account.autoEnableAt,
+      });
+      this.#enable(slot);
+      this.#store.saveNow();
+      this.#checkQuota(slot, 'auto re-enabled');
+    }
+    await this.settleQuotaChecks();
+  }
+
+  /** Run `sweepAutoEnable` every minute (unref'd). */
+  startAutoEnable(intervalMs = QUOTA.sweepMs): void {
+    if (this.#sweepTimer) return;
+    this.#sweepTimer = setInterval(() => void this.sweepAutoEnable(), intervalMs);
+    this.#sweepTimer.unref();
+  }
+
+  stopAutoEnable(): void {
+    if (this.#sweepTimer) clearInterval(this.#sweepTimer);
+    this.#sweepTimer = undefined;
   }
 
   /** Sum of the last upstream quota snapshots of enabled accounts; `extra` is the active bonus / trial credits. */
@@ -530,6 +627,7 @@ export class AccountPool implements TokenSource {
         subscription: s.account.subscription,
         quota: s.account.quota,
         disabledReason: s.account.disabledReason,
+        autoEnableAt: s.account.enabled ? undefined : s.account.autoEnableAt,
         status: !s.account.enabled ? 'disabled' : cooling ? 'cooling' : 'ok',
         cooldownUntil: cooling ? new Date(s.cooldownUntil).toISOString() : undefined,
         cooldownReason: cooling ? s.cooldownReason : undefined,
@@ -606,15 +704,12 @@ export class AccountPool implements TokenSource {
     const before = slot.account.name;
     const name = patch.name?.trim();
     if (name) slot.account.name = name;
-    if (patch.enabled !== undefined) {
-      slot.account.enabled = patch.enabled;
-      if (patch.enabled) {
-        slot.account.disabledReason = undefined;
-        slot.cooldownUntil = 0;
-        slot.cooldownReason = undefined;
-        slot.hold = newHold();
-        slot.modelHolds.clear();
-      }
+    if (patch.enabled === true) this.#enable(slot);
+    else if (patch.enabled === false) {
+      // Disabled by hand: stays off until enabled by hand, whatever disabled it before.
+      slot.account.enabled = false;
+      slot.account.disabledReason = undefined;
+      slot.account.autoEnableAt = undefined;
     }
     this.#store.saveNow();
     if (slot.account.name !== before) this.#emitRename(slot, before);
@@ -680,12 +775,15 @@ export class AccountPool implements TokenSource {
     const raw = await slot.manager.getUsageLimits();
     const b = raw.usageBreakdownList?.[0];
     const extra = extraQuotaOf(b);
+    const now = Date.now();
+    const resetAt = (b?.nextDateReset ?? raw.nextDateReset ?? 0) * 1000;
     const quota = {
       limit: b?.usageLimitWithPrecision ?? b?.usageLimit ?? 0,
       current: b?.currentUsageWithPrecision ?? b?.currentUsage ?? 0,
       ...(extra ? { extra } : {}),
       sinceCheck: 0,
-      checkedAt: new Date().toISOString(),
+      checkedAt: new Date(now).toISOString(),
+      ...(resetAt > 0 ? { resetsAt: new Date(resetAt).toISOString() } : {}),
     };
     slot.account.quota = quota;
     const before = slot.account.name;
@@ -696,16 +794,25 @@ export class AccountPool implements TokenSource {
     if (raw.subscriptionInfo?.subscriptionTitle) {
       slot.account.subscription = raw.subscriptionInfo.subscriptionTitle;
     }
-    if (quotaExhausted(quota)) {
-      const resetAt = (b?.nextDateReset ?? raw.nextDateReset ?? 0) * 1000;
-      this.#cool(
-        slot,
-        resetAt > Date.now() ? resetAt : Date.now() + COOLDOWN.quotaMs,
-        'quota exhausted',
-      );
-    } else if (slot.cooldownReason === 'quota exhausted') {
-      slot.cooldownUntil = 0;
-      slot.cooldownReason = undefined;
+    // Upstream is the judge. Used up: disable until the reset (a reset time already past
+    // means the upstream has not rolled over yet, so look again soon). An account the pool
+    // already disabled for quota takes the fresh reset time either way; it is turned back
+    // on by the sweep or by hand, not here. Accounts disabled by hand are left alone.
+    // Upstream showing credits left on an account a rejected request disabled is a
+    // conflict (the snapshot can lag): it then comes back within 6 h at the latest.
+    const autoDisabled = !slot.account.enabled && slot.account.autoEnableAt !== undefined;
+    if (quotaExhausted(quota, now) && (slot.account.enabled || autoDisabled)) {
+      const until =
+        resetAt > now ? resetAt : now + (resetAt > 0 ? QUOTA.recheckMs : QUOTA.fallbackMs);
+      this.#autoDisable(slot, until, 'upstream quota query');
+    } else if (autoDisabled) {
+      const until = Math.min(Date.parse(slot.account.autoEnableAt ?? ''), now + QUOTA.fallbackMs);
+      slot.account.autoEnableAt = new Date(until).toISOString();
+      getLogger().warn({
+        msg: 'pool account was rejected for quota but the upstream shows credits left',
+        account: id,
+        auto_enable_at: slot.account.autoEnableAt,
+      });
     }
     this.#store.saveNow();
     if (slot.account.name !== before) this.#emitRename(slot, before);
@@ -895,6 +1002,53 @@ export class AccountPool implements TokenSource {
     }
   }
 
+  /** Quota used up: out of rotation until `until`, when the sweep turns it back on. */
+  #autoDisable(slot: Slot, until: number, trigger: string): void {
+    const wasEnabled = slot.account.enabled;
+    slot.account.enabled = false;
+    slot.account.disabledReason = QUOTA_DISABLED_REASON;
+    slot.account.autoEnableAt = new Date(until).toISOString();
+    this.#store.saveNow();
+    getLogger().warn({
+      msg: wasEnabled ? 'pool account disabled, quota used up' : 'pool account quota re-checked',
+      account: slot.account.id,
+      trigger,
+      auto_enable_at: slot.account.autoEnableAt,
+    });
+  }
+
+  /** Same clean slate as an admin enable. */
+  #enable(slot: Slot): void {
+    slot.account.enabled = true;
+    slot.account.disabledReason = undefined;
+    slot.account.autoEnableAt = undefined;
+    slot.cooldownUntil = 0;
+    slot.cooldownReason = undefined;
+    slot.hold = newHold();
+    slot.modelHolds.clear();
+  }
+
+  /** Query the upstream quota in the background; one query in flight per account. */
+  #checkQuota(slot: Slot, trigger: string): void {
+    const id = slot.account.id;
+    if (this.#quotaChecks.has(id)) return;
+    const run = (async () => {
+      try {
+        await this.refreshQuota(id);
+      } catch (e) {
+        getLogger().warn({
+          msg: 'pool account quota check failed',
+          account: id,
+          trigger,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      } finally {
+        this.#quotaChecks.delete(id);
+      }
+    })();
+    this.#quotaChecks.set(id, run);
+  }
+
   #cool(slot: Slot, until: number, reason: string): void {
     slot.cooldownUntil = Math.max(slot.cooldownUntil, until);
     slot.cooldownReason = reason;
@@ -914,6 +1068,7 @@ export class AccountPool implements TokenSource {
     if (e instanceof RefreshTokenInvalidError) {
       slot.account.enabled = false;
       slot.account.disabledReason = 'refresh token rejected — log this account in again';
+      slot.account.autoEnableAt = undefined;
       getLogger().warn({ msg: 'pool account disabled', account: slot.account.id, error: message });
       this.#store.saveNow();
       return;
@@ -928,11 +1083,17 @@ export class AccountPool implements TokenSource {
     if (model && enabled.length > 0 && !enabled.some((s) => offers(s, model))) {
       return new ProviderError({ kind: 'model_unavailable', model }, '');
     }
-    // Only hard cooldowns (quota / credential) can leave nothing in rotation.
+    // Only hard cooldowns (credential) and quota-disabled accounts can leave nothing in
+    // rotation; answer 429 with the earliest time one of them comes back.
     let soonest = Number.POSITIVE_INFINITY;
-    for (const s of enabled) {
+    for (const s of this.#slots.values()) {
       if (!offers(s, model) || skip.has(s.account.id)) continue;
-      if (s.cooldownUntil > now) soonest = Math.min(soonest, s.cooldownUntil);
+      if (s.account.enabled) {
+        if (s.cooldownUntil > now) soonest = Math.min(soonest, s.cooldownUntil);
+        continue;
+      }
+      const at = Date.parse(s.account.autoEnableAt ?? '');
+      if (at > now) soonest = Math.min(soonest, at);
     }
     if (Number.isFinite(soonest)) {
       return new ProviderError(
@@ -953,6 +1114,7 @@ export class AccountPool implements TokenSource {
       inflight: 0,
       hold: newHold(),
       modelHolds: new Map(),
+      estimateCheckAt: 0,
     };
   }
 
@@ -996,6 +1158,7 @@ export class AccountPool implements TokenSource {
       inflight: 0,
       hold: newHold(),
       modelHolds: new Map(),
+      estimateCheckAt: 0,
     };
     this.#slots.set(KIRO_CLI_ACCOUNT_ID, slot);
   }

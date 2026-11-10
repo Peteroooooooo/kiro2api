@@ -77,9 +77,14 @@ let file: string;
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro2api-pool-'));
   file = path.join(dir, 'accounts.json');
+  // A quota fault starts a background quota query; never let it reach the network.
+  vi.spyOn(SingleTokenManager.prototype, 'getUsageLimits').mockRejectedValue(
+    new Error('no upstream in tests'),
+  );
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -132,7 +137,7 @@ describe('AccountPool selection', () => {
     const moved = await pool.acquireContext({ affinityKey: 'conv' });
     expect(moved.accountId).not.toBe(before.accountId);
     expect((await pool.acquireContext({ affinityKey: 'conv' })).accountId).toBe(moved.accountId);
-    expect(pool.list().find((a) => a.id === before.accountId)?.status).toBe('cooling');
+    expect(pool.list().find((a) => a.id === before.accountId)?.status).toBe('disabled');
   });
 
   it('a new conversation avoids an account on hold', async () => {
@@ -197,7 +202,7 @@ describe('AccountPool bookkeeping', () => {
 });
 
 describe('AccountPool quota refresh', () => {
-  it('cools an account whose quota is used up until the reset date, and releases it later', async () => {
+  it('disables an account whose quota is used up until the reset date, and the sweep re-enables it', async () => {
     const { pool } = makePool(['a', 'b']);
     const resetAt = Math.floor(Date.now() / 1000) + 86_400;
     const spy = vi.spyOn(SingleTokenManager.prototype, 'getUsageLimits').mockResolvedValue({
@@ -215,9 +220,15 @@ describe('AccountPool quota refresh', () => {
     try {
       await pool.refreshQuota('a');
       const view = pool.list().find((x) => x.id === 'a');
-      expect(view?.status).toBe('cooling');
-      expect(Date.parse(view?.cooldownUntil ?? '')).toBe(resetAt * 1000);
+      expect(view?.status).toBe('disabled');
+      expect(view?.enabled).toBe(false);
+      expect(view?.disabledReason).toMatch(/quota/);
+      expect(Date.parse(view?.autoEnableAt ?? '')).toBe(resetAt * 1000);
       for (let i = 0; i < 3; i++) expect((await pool.acquireContext()).accountId).toBe('b');
+
+      // Before the reset nothing happens; a quota query that still says used up keeps it off.
+      await pool.sweepAutoEnable();
+      expect(pool.list().find((x) => x.id === 'a')?.enabled).toBe(false);
 
       spy.mockResolvedValue({
         usageBreakdownList: [
@@ -230,8 +241,11 @@ describe('AccountPool quota refresh', () => {
           },
         ],
       });
-      await pool.refreshQuota('a');
-      expect(pool.list().find((x) => x.id === 'a')?.status).toBe('ok');
+      await pool.sweepAutoEnable(resetAt * 1000 + 1);
+      const after = pool.list().find((x) => x.id === 'a');
+      expect(after?.status).toBe('ok');
+      expect(after?.autoEnableAt).toBeUndefined();
+      expect(after?.disabledReason).toBeUndefined();
     } finally {
       spy.mockRestore();
     }
@@ -271,7 +285,7 @@ describe('AccountPool quota refresh', () => {
 
       spy.mockResolvedValue(monthlyUsedUp([trialBonus(500, later)]));
       await pool.refreshQuota('a');
-      expect(pool.list().find((x) => x.id === 'a')?.status).toBe('cooling');
+      expect(pool.list().find((x) => x.id === 'a')?.status).toBe('disabled');
     } finally {
       spy.mockRestore();
     }
@@ -320,6 +334,158 @@ describe('AccountPool quota refresh', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('AccountPool quota auto-disable / auto re-enable', () => {
+  const HOUR = 3_600_000;
+  const usage = (current: number, limit: number, resetSec?: number) => ({
+    ...(resetSec !== undefined ? { nextDateReset: resetSec } : {}),
+    usageBreakdownList: [
+      {
+        currentUsage: current,
+        currentUsageWithPrecision: current,
+        usageLimit: limit,
+        usageLimitWithPrecision: limit,
+        bonuses: [],
+      },
+    ],
+  });
+  const quotaSpy = () => vi.spyOn(SingleTokenManager.prototype, 'getUsageLimits');
+  const view = (pool: AccountPool, id: string) => pool.list().find((x) => x.id === id);
+
+  it('billed credits over the limit only trigger an upstream query, the upstream decides', async () => {
+    const { pool } = makePool(['a', 'b']);
+    const reset = Math.floor(Date.now() / 1000) + 86_400;
+    const spy = quotaSpy().mockResolvedValue(usage(45, 50, reset));
+    await pool.refreshQuota('a');
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    pool.recordCredits('a', 3); // 48 < 50: no query
+    await pool.settleQuotaChecks();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // 48 + 4 >= 50: the estimate says used up, but the upstream still shows headroom.
+    spy.mockResolvedValue(usage(49, 50, reset));
+    pool.recordCredits('a', 4);
+    expect(view(pool, 'a')?.enabled).toBe(true); // not disabled on the estimate alone
+    await pool.settleQuotaChecks();
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(view(pool, 'a')?.status).toBe('ok');
+    expect(view(pool, 'a')?.quota?.sinceCheck).toBe(0);
+  });
+
+  it('the upstream confirming the estimate disables the account until its reset', async () => {
+    const { pool } = makePool(['a', 'b']);
+    const reset = Math.floor(Date.now() / 1000) + 86_400;
+    const spy = quotaSpy().mockResolvedValue(usage(49, 50, reset));
+    await pool.refreshQuota('a');
+    spy.mockResolvedValue(usage(50, 50, reset));
+    pool.recordCredits('a', 2);
+    pool.recordCredits('a', 2); // one query in flight per account
+    await pool.settleQuotaChecks();
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(view(pool, 'a')).toMatchObject({ enabled: false, status: 'disabled' });
+    expect(Date.parse(view(pool, 'a')?.autoEnableAt ?? '')).toBe(reset * 1000);
+    expect((await pool.acquireContext()).accountId).toBe('b');
+  });
+
+  it('a request rejected for quota disables at once, with the 6 h fallback when the query fails', async () => {
+    const { pool } = makePool(['a', 'b']);
+    const t0 = Date.now();
+    pool.reportOutcome('a', { kind: 'quota_exhausted' });
+    expect(view(pool, 'a')?.enabled).toBe(false);
+    await pool.settleQuotaChecks(); // the query rejects (beforeEach stub)
+    const at = Date.parse(view(pool, 'a')?.autoEnableAt ?? '');
+    expect(at).toBeGreaterThanOrEqual(t0 + 6 * HOUR);
+    expect(at).toBeLessThanOrEqual(Date.now() + 6 * HOUR);
+  });
+
+  it('a request rejected for quota takes the reset time from the upstream query', async () => {
+    const { pool } = makePool(['a', 'b']);
+    const reset = Math.floor(Date.now() / 1000) + 3 * 86_400;
+    quotaSpy().mockResolvedValue(usage(50, 50, reset));
+    pool.reportOutcome('a', { kind: 'quota_exhausted' });
+    await pool.settleQuotaChecks();
+    expect(Date.parse(view(pool, 'a')?.autoEnableAt ?? '')).toBe(reset * 1000);
+  });
+
+  it('re-enables at autoEnableAt and disables again when the upstream still says used up', async () => {
+    const { pool } = makePool(['a', 'b']);
+    const reset = Math.floor(Date.now() / 1000) + 3_600;
+    const spy = quotaSpy().mockResolvedValue(usage(50, 50, reset));
+    await pool.refreshQuota('a');
+    expect(view(pool, 'a')?.enabled).toBe(false);
+
+    // Past the reset time the upstream has not rolled over yet and names the next reset.
+    const next = reset + 30 * 86_400;
+    spy.mockResolvedValue(usage(50, 50, next));
+    await pool.sweepAutoEnable(reset * 1000 + 1);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(view(pool, 'a')?.enabled).toBe(false);
+    expect(Date.parse(view(pool, 'a')?.autoEnableAt ?? '')).toBe(next * 1000);
+  });
+
+  it('never auto-enables an account disabled by hand, and a manual disable clears autoEnableAt', async () => {
+    const { pool } = makePool(['a', 'b', 'c']);
+    pool.update('a', { enabled: false });
+    const reset = Math.floor(Date.now() / 1000) + 60;
+    const spy = quotaSpy().mockResolvedValue(usage(50, 50, reset));
+    await pool.refreshQuota('b');
+    expect(view(pool, 'b')?.autoEnableAt).toBeDefined();
+    pool.update('b', { enabled: false });
+    expect(view(pool, 'b')).toMatchObject({ enabled: false, autoEnableAt: undefined });
+    expect(view(pool, 'b')?.disabledReason).toBeUndefined();
+
+    // A quota query of a hand-disabled account does not make it an auto one either.
+    await pool.refreshQuota('a');
+    pool.reportOutcome('a', { kind: 'quota_exhausted' });
+    await pool.sweepAutoEnable(Date.now() + 365 * 86_400_000);
+    expect(view(pool, 'a')).toMatchObject({ enabled: false, autoEnableAt: undefined });
+    expect(view(pool, 'b')).toMatchObject({ enabled: false, autoEnableAt: undefined });
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    // Manual enable clears everything at any time.
+    await pool.refreshQuota('c');
+    expect(view(pool, 'c')?.enabled).toBe(false);
+    pool.update('c', { enabled: true });
+    expect(view(pool, 'c')).toMatchObject({ enabled: true, status: 'ok', autoEnableAt: undefined });
+  });
+
+  it('autoEnableAt survives a restart and the startup sweep acts on it', async () => {
+    const { pool, store } = makePool(['a', 'b']);
+    const reset = Math.floor(Date.now() / 1000) + 3_600;
+    quotaSpy().mockResolvedValue(usage(50, 50, reset));
+    await pool.refreshQuota('a');
+    store.saveNow();
+    const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    expect(saved.accounts[0]).toMatchObject({ enabled: false });
+    expect(Date.parse(saved.accounts[0].autoEnableAt)).toBe(reset * 1000);
+
+    const store2 = new AccountStore(file);
+    store2.load();
+    const pool2 = new AccountPool(config, store2);
+    expect(Date.parse(view(pool2, 'a')?.autoEnableAt ?? '')).toBe(reset * 1000);
+    await pool2.sweepAutoEnable();
+    expect(view(pool2, 'a')?.enabled).toBe(false); // not yet
+    quotaSpy().mockResolvedValue(usage(0, 50, reset + 30 * 86_400));
+    await pool2.sweepAutoEnable(reset * 1000 + 1);
+    expect(view(pool2, 'a')).toMatchObject({
+      enabled: true,
+      status: 'ok',
+      autoEnableAt: undefined,
+    });
+    const saved2 = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    expect(saved2.accounts[0].autoEnableAt).toBeUndefined();
+    expect(saved2.accounts[0].enabled).toBe(true);
+  });
+
+  it('a throttle never disables an account', () => {
+    const { pool } = makePool(['a']);
+    pool.reportOutcome('a', { kind: 'rate_limited', retryAfterSeconds: 5 });
+    pool.reportOutcome('a', { kind: 'capacity', model: 'opus', retryAfterSeconds: 5 });
+    expect(view(pool, 'a')).toMatchObject({ enabled: true, status: 'ok' });
+    expect(view(pool, 'a')?.autoEnableAt).toBeUndefined();
   });
 });
 
@@ -428,7 +594,7 @@ describe('RetryExecutor: account faults switch, once', () => {
     expect(first).not.toBe(second);
 
     const served = pool.list().find((a) => a.stats.requests === 1);
-    expect(pool.list().filter((a) => a.status === 'cooling')).toHaveLength(1);
+    expect(pool.list().filter((a) => a.status === 'disabled')).toHaveLength(1);
     expect((await pool.acquireContext({ affinityKey: 'conv' })).accountId).toBe(served?.id);
   });
 
